@@ -35,6 +35,14 @@ Browser actions:
   {"do": "collect", "id": 12, "max_pages": 10}     [12] is the next-page or load-more control of a list or paged document you want in full: it is followed until the end and all pages come back as one document
   {"do": "fetch", "id": 12}                        download the file behind link [12] (archive, CSV, PDF, text) and read it as a document
   {"do": "wait"}                                   pause two seconds, for a page that is still loading
+  {"do": "steps", "steps": [{"field": "<label>", "value": "..."}, {"press": "<button label>"}, ...]}
+                                                   a sequence across page reloads: each step finds its control again
+                                                   by its label on the page as it then is, so a whole chain (choose,
+                                                   apply, choose the next, apply, fill, continue) runs in one turn.
+                                                   "field" fills a text field, chooses in a list or ticks a box
+                                                   (value true/false); "press" clicks a button or link. It stops at
+                                                   the first step whose control it cannot find unambiguously and
+                                                   tells you which steps ran. Use it for forms whose fields you know.
   {"do": "done", "summary": "<ten words>", "answer": "..."}   you are finished; "answer" only when you were asked for one
 
 Reading the page:
@@ -54,7 +62,24 @@ Reading the page:
 
 STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung page must not freeze the whole run
 FULL_TURNS = 2  # how many past turns stay word for word; older ones keep the reasoning and drop the page text
-NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch"}
+NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps"}
+STEPS_LIMIT, STEPS_TIMEOUT = 30, 240  # one "steps" action: at most this many steps, and seconds in all
+CONTROL = re.compile(r'\[(\d+)\] (?:\(in collapsed menu\) )?(select|input(?:\(\w+\))?|button|checkbox|radio|link|clickable|switch) "([^"]*)"([^\[]*)')
+
+
+def find_control(page: str, label: str, kinds: tuple[str, ...]) -> tuple[str | None, str]:
+    """The id of the one control of one of `kinds` labelled `label` on the rendered page: an exact label first,
+    then a label that contains it. (None, why) when there is none or more than one that is not disabled."""
+    wanted = " ".join(label.casefold().split())
+    found = [(m.group(1), m.group(2), " ".join(m.group(3).casefold().split()), m.group(4)) for m in CONTROL.finditer(page)]
+    found = [f for f in found if f[1].split("(")[0] in kinds and "disabled" not in f[3]]
+    for match in ([f for f in found if f[2] == wanted], [f for f in found if wanted and wanted in f[2]]):
+        ids = list(dict.fromkeys(f[0] for f in match))
+        if len(ids) == 1:
+            return ids[0], match[0][1]
+        if len(ids) > 1:
+            return None, f'{len(ids)} controls are labelled "{label}" ({", ".join("[" + i + "]" for i in ids)}): use their ids'
+    return None, f'no control labelled "{label}" on the page now'
 
 
 def state_fingerprint(observation: str) -> str:
@@ -152,12 +177,47 @@ class Agent:
         reply = await llm.chat_json(messages, think=True, label=f"{self.name}:escalated")
         return reply or await llm.chat_json(self._messages(user), think=self.think, label=self.name)
 
+    async def _steps(self, steps: list) -> str:
+        """Runs a chain of label-addressed steps across page reloads (the "steps" action). Every step is turned into
+        the plain action it stands for and passes the same guard as a fill, select, set or click the model sends."""
+        done: list[str] = []
+        for number, step in enumerate(steps[:STEPS_LIMIT], start=1):
+            if not isinstance(step, dict):
+                continue
+            label = str(step.get("press") or step.get("field") or "")
+            page = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
+            if "press" in step:
+                aid, kind = find_control(page, label, ("button", "link", "clickable"))
+                action = {"do": "click", "id": aid}
+            else:
+                aid, kind = find_control(page, label, ("select", "input", "checkbox", "radio", "switch"))
+                value = step.get("value", "")
+                if kind == "select":
+                    action = {"do": "select", "id": aid, "value": str(value)}
+                elif kind in ("checkbox", "radio", "switch"):
+                    action = {"do": "set", "id": aid, "value": value if isinstance(value, bool) else str(value).lower() not in ("false", "0", "no", "")}
+                else:
+                    action = {"do": "fill", "id": aid, "text": str(value)}
+            if aid is None:
+                return (f"ran {len(done)} of {len(steps)} steps" + (": " + "; ".join(done) if done else "") +
+                        f". Stopped at step {number}: {kind}. The page is as it is now; continue from there.")
+            veto = self.guard(action) if self.guard else None
+            if veto:
+                return f"ran {len(done)} of {len(steps)} steps" + (": " + "; ".join(done) if done else "") + f". Step {number} was refused: {veto}"
+            result = await asyncio.wait_for(self._browser(action), STEP_TIMEOUT)
+            done.append(f'{number}. {label}: {str(result)[:80]}')
+            if any(word in str(result) for word in ("has no option", "did not change", "is disabled", "BUT the field")):
+                return f"ran {len(done)} of {len(steps)} steps: " + "; ".join(done) + f". Step {number} did not take; check it."
+        return f"ran all {len(done)} steps: " + "; ".join(done)
+
     async def _browser(self, action: dict) -> str:
         do, tab = action.get("do"), self.tab
         if do == "login":
             return await tab.login()
         if do == "click":
             return await tab.click(action.get("id"))
+        if do == "steps":
+            return await self._steps(action.get("steps") or [])
         if do == "fill":
             return await tab.fill(action.get("id"), action.get("text", ""), bool(action.get("enter")))
         if do == "select":
@@ -325,7 +385,7 @@ class Agent:
                     continue
                 before = self.tab.page.url
                 try:
-                    result = await asyncio.wait_for(self._browser(action), STEP_TIMEOUT)
+                    result = await asyncio.wait_for(self._browser(action), STEPS_TIMEOUT if do == "steps" else STEP_TIMEOUT)
                 except asyncio.TimeoutError:
                     result = f"{do} took longer than {STEP_TIMEOUT} s and was stopped; the page may be stuck"
                 except Exception as error:  # noqa: BLE001

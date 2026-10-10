@@ -56,6 +56,9 @@ Reading the bid sheet
 - null means the value is not known: leave that field empty. 0 or 0.00 is a known zero: enter it.
 - "omitted_positions" could not be priced. Never invent values for them: use the form's explicit way of leaving
   a position out, if it has one.
+- Save turns: once you have seen how one step of the form works (which fields, which button applies a choice or
+  moves on), do a whole step, for example one position with all its choices and amounts, in one "steps" action,
+  using the labels exactly as the page shows them. If it stops part-way, read the page and carry on from there.
 
 {actions}
 One more action:
