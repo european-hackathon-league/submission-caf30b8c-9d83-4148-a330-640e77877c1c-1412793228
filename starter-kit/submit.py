@@ -150,7 +150,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     """
     reference = str(context.get("tender_reference") or bid.tender_reference)
     guard = sanity.TypingGuard() if sanity.enabled("typing_guard") else None
-    codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
+    codes: list[str] = []
+    final = {"clicked": False, "page": ""}  # set by finalize once the binding submit button was pressed  # what the mailbox handed out so far: a used code must not be handed out again
     review: Report | None = None
     held_back = 0  # final steps refused because the page did not show the bid
 
@@ -227,7 +228,17 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             print("[submit] final step pressed without full review evidence ("
                   + ("time is short" if short else f"held back {held_back} time(s)") + "): "
                   + " | ".join(review.unproven), flush=True)
-        return await tender_tab.click(action.get("id"))
+        result = await tender_tab.click(action.get("id"))
+        # Submitting ends the run and with it the run token: every later model call fails ("expired/unknown run
+        # token" in sandbox runs 6da03229, 8184b178, 3c3568bb). So the confirmation is read here, in code, and the
+        # clerk stops without another model turn.
+        try:
+            final["page"] = await asyncio.wait_for(tender_tab.observe(), 20)
+        except Exception:  # noqa: BLE001
+            final["page"] = ""
+        final["clicked"] = True
+        clerk.deadline = 0  # ends the agent loop before its next model call
+        return result
 
     def heading() -> str:
         left = int(deadline - time.time())
@@ -258,6 +269,9 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
+    if final["clicked"]:  # submitted: the confirmation was read in code, no model turn after the click
+        receipt = receipt or final["page"][:1500]
+        return {"submitted": True, "receipt": receipt, "notes": notes or "submitted; confirmation read without the model"}
     if not outcome.get("done"):
         notes = (notes + " " if notes else "") + f"stopped after {outcome.get('steps', 0)} steps without a confirmation"
     return {"submitted": bool(outcome.get("done") and receipt), "receipt": receipt, "notes": notes}
