@@ -126,8 +126,11 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     async def answer(action: dict) -> str:
         return case.answer(str(action.get("question", "")).strip("[] "), str(action.get("status", "")), str(action.get("note", "")))
 
+    # Navigation runs without the model's thinking: about twice as fast. The facts themselves are read by the
+    # extraction calls in casefile.py, which keep thinking on. AGENT_THINK=1 turns it back on for comparison.
     agent = Agent(name, tab, system, briefing, extra={"keep": keep, "answer": answer}, deadline=deadline,
-                  max_steps=int(os.environ.get("AGENT_MAX_STEPS", "150")), idle=team.hook(name))
+                  max_steps=int(os.environ.get("AGENT_MAX_STEPS", "150")), idle=team.hook(name),
+                  think=os.environ.get("AGENT_THINK") == "1")
     return agent
 
 
