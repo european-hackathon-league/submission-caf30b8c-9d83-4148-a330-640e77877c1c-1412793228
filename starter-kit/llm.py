@@ -21,7 +21,8 @@ MODEL = "qwen"
 MAX_CONCURRENT = 16  # the team's limit is 32 across all its runs, and test runs may overlap
 ATTEMPTS = 5
 CALL_TIMEOUT = 150  # seconds: a model that scaled to zero is slow to answer its first call
-WARM_TIMEOUT = 75  # a quick call (thinking off) this late once the model is awake is stuck: ask again.
+WARM_TIMEOUT = 120  # a quick call (thinking off) this late once the model is awake is stuck: ask again. 75 s cut off
+# a first turn with a large prompt under load (submit agent, sandbox test run 54c78c38: 85 s lost to the retry).
 # Calls with thinking on (fact extraction) keep CALL_TIMEOUT: under load they legitimately take longer.
 MAX_TOKENS_CEILING = 16000  # a reply cut off by its token limit is asked again with twice the room, up to this
 PERMANENT = (400, 401, 403, 404, 413, 422)  # asking again rarely helps: one more try, then give up
