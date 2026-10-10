@@ -23,6 +23,7 @@ import llm
 import run as contract
 from browser_env import Tab
 from calculator import calculate_bid
+import validate
 from casefile import SHAPES, CaseFile, read_context
 from worker import ACTIONS_HELP, Agent
 
@@ -170,8 +171,14 @@ async def solve(task: dict, playwright) -> dict | None:
     try:
         working = [tab for name, tab in tabs.items() if not only or name in only]
         team = Team(case, [tab.site_id for tab in working], investigate_until)
-        outcomes = await asyncio.gather(*(investigator(case, team, tab, investigate_until).run() for tab in working),
-                                        return_exceptions=True)
+        async def bounded(tab):  # an agent stuck past the deadline is stopped so that the others' facts still count
+            limit = max(10.0, investigate_until - time.time() + 20)
+            try:
+                return await asyncio.wait_for(investigator(case, team, tab, investigate_until).run(), limit)
+            except asyncio.TimeoutError:
+                team.finished.set()
+                return RuntimeError(f"stopped after {limit:.0f} s: still busy at the investigation deadline")
+        outcomes = await asyncio.gather(*(bounded(tab) for tab in working), return_exceptions=True)
         for tab, outcome in zip(working, outcomes):
             print(f"[{tab.site_id}] finished: {outcome if isinstance(outcome, Exception) else json.dumps(outcome, ensure_ascii=False)[:300]}", flush=True)
         for _ in range(40):  # facts of the last filed documents
@@ -182,6 +189,9 @@ async def solve(task: dict, playwright) -> dict | None:
         facts = case.inputs()
         bid = calculate_bid(case.reference, case.scenario, facts.governing, facts.positions, facts.clarifications,
                             facts.requirements, facts.materials, facts.authorities, facts.no_material)
+        bid, issues = validate.check(bid, {p.position for p in facts.positions} or None)
+        if issues:
+            print("VALIDATOR: " + " | ".join(issues), flush=True)
         print(f"Investigation took {time.time() - started:.0f} s. {llm.summary()}", flush=True)
         print("CASE FILE\n" + case.status(), flush=True)
         print("OPEN QUESTIONS LEFT: " + (", ".join(qid for qid, _ in case.questions()) or "none"), flush=True)

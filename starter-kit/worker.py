@@ -48,6 +48,7 @@ Reading the page:
   after a session expires, log in again. Surveys, tools and help pages lead away from your task.
 """
 
+STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung page must not freeze the whole run
 FULL_TURNS = 2  # how many past turns stay word for word; older ones keep the reasoning and drop the page text
 NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch"}
 
@@ -118,14 +119,20 @@ class Agent:
     async def run(self) -> dict:
         results: list[str] = []
         outcome = {"done": False, "summary": "", "answer": None, "steps": 0}
+        self.log(f"starting at {self.tab.base_url}")
         if self.tab.page.url in ("", "about:blank"):
-            results.append(await self.tab.goto(self.tab.base_url + "/"))
+            try:
+                results.append(await asyncio.wait_for(self.tab.goto(self.tab.base_url + "/"), STEP_TIMEOUT))
+            except asyncio.TimeoutError:
+                results.append(f"opening {self.tab.base_url} took longer than {STEP_TIMEOUT} s; reload or try again")
         repeats, last_signature, failures = 0, "", 0
         while self.steps < self.max_steps and time.time() < self.deadline:
             self.steps += 1
             clock = time.time()
             try:
-                page = await self.tab.observe()
+                page = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
+            except asyncio.TimeoutError:
+                page = f"(the page did not finish loading within {STEP_TIMEOUT} s; reload it or go elsewhere)"
             except Exception as error:  # noqa: BLE001
                 page = f"(the page could not be read: {str(error)[:200]})"
             results.extend(self.tab.take_events())
@@ -185,7 +192,9 @@ class Agent:
                     continue
                 before = self.tab.page.url
                 try:
-                    result = await self._browser(action)
+                    result = await asyncio.wait_for(self._browser(action), STEP_TIMEOUT)
+                except asyncio.TimeoutError:
+                    result = f"{do} took longer than {STEP_TIMEOUT} s and was stopped; the page may be stuck"
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
