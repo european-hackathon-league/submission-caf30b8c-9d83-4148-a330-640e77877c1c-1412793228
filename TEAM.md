@@ -30,6 +30,26 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 10 | **Speed: stuck investigators** (100 run 74b22ceb took 19.3 of 20 min) | The tender-portal agent opened the same unchanged page 122× (~8 min); the investigation waits for every agent, so it ran to its time limit. Without the loop it would have ended around min 4-5 | 🟨 Maria, branch `maria/erp-loop-fixes` 76db483: a stuck investigator is sent idle (6 identical rounds, or circling after 2 hints) and woken by news; 296 tests OK; needs a sandbox run |
 | 9 | Work on branches, not main | Pushing to main got in the way of the other builders | Everyone; merge to main only when agreed |
 
+## Branch and bound, local (21:00 UTC, no sandbox runs while the organisers refresh)
+
+**Bound 1: what decided each of the 29 sandbox runs** (`python tuning/run_report.py`): 8 clean, 4 agent loop,
+4 website outage inside the sandbox, 13 model overload. All four fast 100s (9.6-10.8 min) are clean: the
+investigation ended by itself in under 450 s and no agent repeated a thought more than 7 times. Many overload runs
+also hide long loops (ERP 44x, 79x, 88x, 90x).
+
+**Bound 2: replay of every recorded loop** (`python tuning/replay_loops.py <starter-kit dir>`): the 18 agent loops
+from the logs are fed back into a code variant with a model that ignores every hint (worst case).
+
+| Variant | Loops stopped | Loop turns allowed (of 1,259 recorded) |
+|---|---|---|
+| main 1fab415 | 3 / 18 | 1,116 |
+| v1 (44a626ef, the promoted 9.6 min run) | 3 / 18 | 1,116 |
+| **branch `maria/erp-loop-fixes` 5ee465a** | **18 / 18** | **158** |
+
+v1 was fast because its routing prompt persuaded the model to stop, not because the code stops a loop. The branch
+has v1's routing **and** the code that stops loops, and scored 100 in 10.3 min (2b8b5ca8). A new variant must
+pass both bounds before it gets a sandbox run.
+
 ## The five 100 runs compared (20:20 UTC)
 
 | Run | Who / code | Total | Investigation | Bid + TAN | Calls / cost | Model timeouts | Looping agent |
