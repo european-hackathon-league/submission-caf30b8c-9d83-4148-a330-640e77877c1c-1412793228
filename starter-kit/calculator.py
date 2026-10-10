@@ -35,6 +35,10 @@ def format_de(value: Decimal | int | float | str, decimals: int = 2) -> str:
     return str(q).replace(".", ",")
 
 
+format_german_decimal = format_de
+
+
+
 def parse_locale_decimal(raw: str | int | float | Decimal, locale_hint: str | None = None) -> Decimal:
     """Parse a number string respecting explicit locale hints like '(de-DE)' or '(en-US)'."""
     if isinstance(raw, Decimal):
@@ -127,6 +131,16 @@ def parse_timestamp(ts_str: str) -> datetime | None:
     if m_de_d:
         day, month, year = m_de_d.groups()
         return datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
+
+    # 5. Look for slash dates with explicit order: 01/05 (MM/TT) 2027 or 17/01 (TT/MM) 2027
+    m_slash = re.search(r"(\d{2})/(\d{2})\s*\((MM/TT|TT/MM|DD/MM)\)\s*[·\s]*(\d{4})", s, re.IGNORECASE)
+    if m_slash:
+        p1, p2, fmt, year = m_slash.groups()
+        if fmt.upper() == "MM/TT":
+            month, day = int(p1), int(p2)
+        else:
+            day, month = int(p1), int(p2)
+        return datetime(int(year), month, day, tzinfo=timezone.utc)
 
     return None
 
@@ -225,7 +239,7 @@ class PriceCondition:
     valid_from: datetime
     valid_to: datetime
     currency: str  # "EUR" or "USD"
-    fx_key: str | None  # e.g. "FX-6282"
+    fx_key: str | None  # e.g. "FX-xxxx"
     price_unit: int  # e.g. 1 or 100
     locale: str  # "de-DE" or "en-US"
     scales: list[tuple[int, Decimal]] = field(default_factory=list)  # (min_qty, price_per_price_unit)
@@ -244,7 +258,7 @@ class ErpMaterial:
     pack_size: int = 1  # Packinhalt (Stück/Karton)
     allocation_weight_g: Decimal = ZERO  # Umlagegewicht (g/Stück)
     surcharge_mass_g: Decimal = ZERO  # Zuschlagsmasse (g/Stück)
-    price_index_key: str | None = None  # Preisindex (e.g. MET-4607)
+    price_index_key: str | None = None  # Preisindex (e.g. MET-xxxx)
     stock_lead_weeks: int = 0
     prod_lead_weeks: int = 0
     free_stock: int = 0
@@ -712,3 +726,7 @@ def calculate_bid(
         positions=calculated_positions,
         total_net=total_net,
     )
+
+
+compute_bid = calculate_bid
+

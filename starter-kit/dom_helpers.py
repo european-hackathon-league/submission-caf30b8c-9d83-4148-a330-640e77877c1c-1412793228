@@ -157,67 +157,71 @@ async def get_actionable_links(page, base_url: str) -> list[dict[str, str]]:
     return clean_links
 
 
-async def handle_gates_and_notices(page, target_url: str) -> None:
+async def handle_gates_and_notices(page, target_url: str) -> str:
     """Handle cookie consent, ERP /notice receipt gate, customer-portal document access gate, and 503 retries."""
+    text = ""
     for _ in range(5):
-        await prepare_page(page)
         text = await get_clean_text(page)
 
         # 1. Cookie consent wall
-        consent_btn = page.locator(
-            'button[value="accept"], button:has-text("Cookies akzeptieren"), button:has-text("Auswahl bestätigen")'
-        )
-        if await consent_btn.count() > 0 and "Cookies" in text:
-            await consent_btn.first.click()
-            await page.wait_for_load_state("domcontentloaded")
-            continue
+        if "Cookies" in text:
+            consent_btn = page.locator(
+                'button[value="accept"], button:has-text("Cookies akzeptieren"), button:has-text("Auswahl bestätigen")'
+            )
+            if await consent_btn.count() > 0:
+                await consent_btn.first.click()
+                await page.wait_for_load_state("domcontentloaded")
+                continue
 
         # 2. Transient error page ("Dienst vorübergehend nicht verfügbar")
         if "Dienst vorübergehend nicht verfügbar" in text or "Anfrage konnte nicht verarbeitet werden" in text:
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.2)
             await page.goto(target_url, wait_until="domcontentloaded")
             continue
 
         # 3. ERP Systemmitteilung receipt gate on /notice
-        erp_receipt = page.locator("canvas#erp-receipt")
-        if await erp_receipt.count() > 0:
-            label = strip_zwc(await erp_receipt.first.get_attribute("aria-label") or "")
-            code = label.split(":", 1)[-1].strip() if ":" in label else label.strip()
-            receipt_input = page.locator('input[name="receipt"]')
-            if await receipt_input.count() > 0:
-                await receipt_input.first.fill(code)
-            ack_cb = page.locator('input[name="acknowledged"]')
-            if await ack_cb.count() > 0:
-                await ack_cb.first.check()
-            submit_btn = page.locator('form[action="/notice"] button[type="submit"], button:has-text("Weiter")')
-            if await submit_btn.count() > 0:
-                await submit_btn.first.click()
-                await page.wait_for_load_state("domcontentloaded")
-                if page.url.rstrip("/") != target_url.rstrip("/"):
-                    await page.goto(target_url, wait_until="domcontentloaded")
-                continue
+        if "Empfangsnummer" in text or "/notice" in page.url:
+            erp_receipt = page.locator("canvas#erp-receipt")
+            if await erp_receipt.count() > 0:
+                label = strip_zwc(await erp_receipt.first.get_attribute("aria-label") or "")
+                code = label.split(":", 1)[-1].strip() if ":" in label else label.strip()
+                receipt_input = page.locator('input[name="receipt"]')
+                if await receipt_input.count() > 0:
+                    await receipt_input.first.fill(code)
+                ack_cb = page.locator('input[name="acknowledged"]')
+                if await ack_cb.count() > 0:
+                    await ack_cb.first.check()
+                submit_btn = page.locator('form[action="/notice"] button[type="submit"], button:has-text("Weiter")')
+                if await submit_btn.count() > 0:
+                    await submit_btn.first.click()
+                    await page.wait_for_load_state("domcontentloaded")
+                    if page.url.rstrip("/") != target_url.rstrip("/"):
+                        await page.goto(target_url, wait_until="domcontentloaded")
+                    continue
 
         # 4. Customer portal Dokumentenüberlassung gate
-        access_receipt = page.locator("canvas#access-receipt")
-        if await access_receipt.count() > 0:
-            label = strip_zwc(await access_receipt.first.get_attribute("aria-label") or "")
-            code = label.split(":", 1)[-1].strip() if ":" in label else label.strip()
-            ref_radio = page.locator('input[name="purpose"][value="reference"]')
-            if await ref_radio.count() > 0:
-                await ref_radio.first.check()
-            receipt_input = page.locator('input[name="receipt"]')
-            if await receipt_input.count() > 0:
-                await receipt_input.first.fill(code)
-            ack_cb = page.locator('input[name="acknowledged"]')
-            if await ack_cb.count() > 0:
-                await ack_cb.first.check()
-            read_btn = page.locator('button[name="operation"][value="read"]')
-            if await read_btn.count() > 0:
-                await read_btn.first.click()
-                await page.wait_for_load_state("domcontentloaded")
-                continue
+        if "Dokumentenüberlassung" in text or "Empfangszeichen" in text:
+            access_receipt = page.locator("canvas#access-receipt")
+            if await access_receipt.count() > 0:
+                label = strip_zwc(await access_receipt.first.get_attribute("aria-label") or "")
+                code = label.split(":", 1)[-1].strip() if ":" in label else label.strip()
+                ref_radio = page.locator('input[name="purpose"][value="reference"]')
+                if await ref_radio.count() > 0:
+                    await ref_radio.first.check()
+                receipt_input = page.locator('input[name="receipt"]')
+                if await receipt_input.count() > 0:
+                    await receipt_input.first.fill(code)
+                ack_cb = page.locator('input[name="acknowledged"]')
+                if await ack_cb.count() > 0:
+                    await ack_cb.first.check()
+                read_btn = page.locator('button[name="operation"][value="read"]')
+                if await read_btn.count() > 0:
+                    await read_btn.first.click()
+                    await page.wait_for_load_state("domcontentloaded")
+                    continue
 
         break
+    return text
 
 
 async def safe_goto(page, url: str) -> str:
@@ -225,16 +229,15 @@ async def safe_goto(page, url: str) -> str:
     for attempt in range(4):
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            await handle_gates_and_notices(page, url)
-            text = await get_clean_text(page)
+            text = await handle_gates_and_notices(page, url)
             if "Dienst vorübergehend nicht verfügbar" in text and attempt < 3:
-                await asyncio.sleep(0.3 * (attempt + 1))
+                await asyncio.sleep(0.25 * (attempt + 1))
                 continue
             return text
         except Exception:
             if attempt == 3:
                 raise
-            await asyncio.sleep(0.3 * (attempt + 1))
+            await asyncio.sleep(0.25 * (attempt + 1))
     return await get_clean_text(page)
 
 
@@ -383,7 +386,7 @@ def parse_qa_pages(qa_texts: list[str]) -> list[QAClarification]:
             ts = parse_timestamp(date_part) or parse_timestamp(body) or datetime(2027, 1, 1, tzinfo=timezone.utc)
             qa = QAClarification(number=q_num, timestamp=ts, text=body.strip())
 
-            # 1. Check withdrawal: "Antwort auf Rückfrage 8152 wird ... zurückgezogen"
+            # 1. Check withdrawal: "Antwort auf Rückfrage NNNN wird ... zurückgezogen"
             m_with = re.search(
                 r"(?:Rückfrage|Antwort|Frage)\s+(\d{3,6})\b[^\n.]*?(?:zurückgezogen|widerrufen|storniert|ungültig)",
                 body,
@@ -422,7 +425,7 @@ def parse_qa_pages(qa_texts: list[str]) -> list[QAClarification]:
                     unit_val = m_qty_prose.group(3) or ""
                     qa.quantity_changes.append((pos_id, qty_val, unit_val))
 
-            # 3. Check scoped technical amendments: "Revision R-6156, Anforderung A-2: Hub/Stellweg = 482 mm"
+            # 3. Check scoped technical amendments: "Revision R-xxxx, Anforderung A-x: Hub/Stellweg = NNN mm"
             for m_amend in re.finditer(
                 r"Revision\s+(R-\d+)\s*,\s*Anforderung\s+(A-\d+)\s*:\s*([^=:\n]+?)\s*[=:]\s*(\d+|\S+)",
                 body,
@@ -588,7 +591,7 @@ def parse_erp_material(
     m_sur = re.search(r"Zuschlagsmasse\s+([\d.,]+)\s*g/Stück", combined_header, re.IGNORECASE)
     sur_mass = parse_locale_decimal(m_sur.group(1)) if m_sur else ZERO
 
-    # Preisindex: "Preisindex MET-4607"
+    # Preisindex: "Preisindex MET-xxxx"
     m_idx = re.search(r"Preisindex\s+(MET-\d+)", combined_header, re.IGNORECASE)
     price_idx = m_idx.group(1) if m_idx else None
 
@@ -602,7 +605,7 @@ def parse_erp_material(
     m_mount = re.search(r"Befestigung\s+HYD_PRD\s+[—\-]\s+([^\n\t]+)", t_clean)
     m_cert = re.search(r"Zertifizierung\s*ⓘ\s*([^\n\t]+)", t_clean)
 
-    # Also parse header description: "Hydraulikzylinder 80/200, 210 bar, Schwenkauge, EN 1493;"
+    # Also parse header description: "Hydraulikzylinder B/S, P bar, Mounting, Cert;"
     m_desc = re.search(
         r"Hydraulikzylinder\s+(\d+)/(\d+),\s*(\d+)\s*bar,\s*([^,;]+)(?:,\s*([^;]+))?;",
         combined_header,
@@ -642,7 +645,7 @@ def parse_erp_material(
     m_prod_lead = re.search(r"Produktionslieferzeit:\s*(\d+)\s*Wochen", p_clean, re.IGNORECASE)
     prod_lead = int(m_prod_lead.group(1)) if m_prod_lead else 0
 
-    # MMBE stock: prefer canvas "Verfügbarer Gesamtbestand: 31 Stück" or "Frei verwendbar \t 31"
+    # MMBE stock: prefer canvas "Verfügbarer Gesamtbestand: N Stück" or "Frei verwendbar \t N"
     free_stock = 0
     m_canvas_stock = re.search(r"Verfügbarer Gesamtbestand:\s*(\d+)\s*Stück", s_clean, re.IGNORECASE)
     m_row_stock = re.search(r"Frei verwendbar\s+(\d+)", s_clean, re.IGNORECASE)
@@ -806,14 +809,14 @@ def parse_mail_messages_into_rules(
                 er_key, rev_id, mm_val = m_er.groups()
                 rules.end_reserves[er_key] = (rev_id, int(mm_val))
 
-        # 3. Verpackungstarife (logistik@) -> VP-xxxx: 13.25 EUR je angefangenem Karton
+        # 3. Verpackungstarife (logistik@) -> VP-xxxx: rate EUR je angefangenem Karton
         elif sender_local == "logistik" and "verpackungstarif" in subj_lower:
             loc = "en-US" if "dezimalpunkt" in body.lower() else "de-DE"
             for m_vp in re.finditer(r"(VP-\d+)\s*:\s*([\d.,]+)\s*EUR", body, re.IGNORECASE):
                 vp_key, rate_s = m_vp.groups()
                 rules.packaging_tariffs[vp_key] = parse_locale_decimal(rate_s, loc)
 
-        # 4. Terminfreigabe (logistik@) -> TZ-xxxx: Artikel HZ-xxxx; Zusage W Wochen bei höchstens M Stück
+        # 4. Terminfreigabe (logistik@) -> TZ-xxxx: Artikel XX-xxxx; Zusage W Wochen bei höchstens M Stück
         elif sender_local == "logistik" and "terminfreigabe" in subj_lower:
             for m_tz in re.finditer(
                 r"(TZ-\d+)\s*:\s*Artikel\s+([A-Z0-9\-]+)\s*;\s*Zusage\s+(\d+)\s*Wochen\s+bei\s+höchstens\s+(\d+)\s*Stück",
@@ -828,7 +831,7 @@ def parse_mail_messages_into_rules(
                     max_pooled_qty=int(max_q_s),
                 )
 
-        # 5. Devisenfixing (finanzen@) -> FX-xxxx: 1 USD = 1.0873 EUR
+        # 5. Devisenfixing (finanzen@) -> FX-xxxx: 1 USD = rate EUR
         elif sender_local == "finanzen" and "devisenfixing" in subj_lower:
             loc = "en-US" if "dezimalpunkt" in body.lower() else "de-DE"
             for m_fx in re.finditer(
@@ -861,7 +864,7 @@ def parse_mail_messages_into_rules(
                 if bands:
                     rules.bonus_plans[pb_key] = bands
 
-        # 7. Rüstpools (kalkulation@) -> RP-xxxx: einmalig 517.25 EUR
+        # 7. Rüstpools (kalkulation@) -> RP-xxxx: einmalig fee EUR
         elif sender_local == "kalkulation" and "rüstpool" in subj_lower:
             loc = "en-US" if "dezimalpunkt" in body.lower() else "de-DE"
             for m_rp in re.finditer(r"(RP-\d+)\s*:\s*einmalig\s+([\d.,]+)\s*EUR", body, re.IGNORECASE):
@@ -886,11 +889,11 @@ def parse_mail_messages_into_rules(
                 else:
                     rules.condition_clauses[k_key] = "base_only"
 
-        # 9. Preisindizes (kalkulation@) -> MET-xxxx = 3,15 EUR/kg (gültig DD.MM.YYYY bis DD.MM.YYYY)
+        # 9. Preisindizes (kalkulation@) -> MET-xxxx = rate EUR/kg (gültig DD.MM.YYYY bis DD.MM.YYYY)
         elif sender_local == "kalkulation" and "preisindizes" in subj_lower:
             loc = "en-US" if "dezimalpunkt" in body.lower() else "de-DE"
             scen_day = datetime(scenario_date.year, scenario_date.month, scenario_date.day, tzinfo=timezone.utc)
-            # First check windowed entries: MET-4607 = 3,15 EUR/kg (gültig 25.01.2027 bis 28.02.2027)
+            # First check windowed entries: MET-xxxx = rate EUR/kg (gültig DD.MM.YYYY bis DD.MM.YYYY)
             matched_window_keys: set[str] = set()
             for m_win in re.finditer(
                 r"(MET-\d+)\s*=\s*([\d.,]+)\s*EUR/kg\s*\(\s*gültig\s+(?:ab\s+)?(\d{2}\.\d{2}\.\d{4})(?:\s+bis\s+(\d{2}\.\d{2}\.\d{4}))?\s*\)",
@@ -904,10 +907,38 @@ def parse_mail_messages_into_rules(
                     rules.metal_indices[met_key] = parse_locale_decimal(rate_s, loc)
                     matched_window_keys.add(met_key)
 
-            # Fallback for non-windowed entries: MET-4607 = 3,15 EUR/kg
+            # Fallback for non-windowed entries: MET-xxxx = rate EUR/kg
             for m_plain in re.finditer(r"(MET-\d+)\s*=\s*([\d.,]+)\s*EUR/kg", body, re.IGNORECASE):
                 met_key, rate_s = m_plain.groups()
                 if met_key not in matched_window_keys and f"{met_key} =" in body and "(gültig" not in body:
                     rules.metal_indices[met_key] = parse_locale_decimal(rate_s, loc)
 
     return rules
+
+
+def parse_governing_revision(text: str, scenario_date: datetime) -> str | None:
+    """Parse Revisionshistorie table text (with tooltips revealed) to find the governing current revision."""
+    cleaned = strip_zwc(text)
+    candidates: list[tuple[bool, datetime, str]] = []
+    for line in cleaned.splitlines():
+        m_rev = re.search(r"\bRevision\s+(R-\d+)\b", line, re.IGNORECASE)
+        if not m_rev:
+            continue
+        rev_id = m_rev.group(1)
+        low = line.lower()
+        if "ersetzt" in low or "ungültig" in low or "zurückgezogen" in low or "entwurf" in low:
+            continue
+        dt = parse_timestamp(line) or datetime(2020, 1, 1, tzinfo=timezone.utc)
+        if dt > scenario_date:
+            continue
+        is_explicit_valid = "gültig" in low or "aktuell" in low
+        candidates.append((is_explicit_valid, dt, rev_id))
+
+    if candidates:
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        return candidates[-1][2]
+
+    # Fallback: any R-xxxx in text
+    m_any = re.search(r"\b(R-\d+)\b", cleaned)
+    return m_any.group(1) if m_any else None
+
