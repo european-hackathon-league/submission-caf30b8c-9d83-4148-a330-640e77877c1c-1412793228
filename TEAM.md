@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 17:10.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 18:00.
 
 ## Owners
 
@@ -13,12 +13,12 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026,
 
 ## Success levels
 
-| Level | Criterion | Status (16:50) |
+| Level | Criterion | Status (18:00) |
 |---|---|---|
-| 🟢 Minimum | Eligible signed bid (correct tender reference) on the public dataset | 🟨 first test run of the model-directed agent is running |
-| 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | ⬜ best local run 29.75 in ~14 min |
+| 🟢 Minimum | Eligible signed bid (correct tender reference) on the public dataset | ✅ reached 17:34 (test run 6da03229: eligible, quality 10; the bid was signed but empty) |
+| 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | ⬜ best sandbox 10, best local 29.75; sandbox runs take ~13 min |
 | 🔵 Target | Quality ≥ 95, < 8 min, low cost (Qwen first), 3 test runs in a row without a crash | ⬜ |
-| ⭐ Final-ready | Nothing layout-specific in the code; passes the AI review; clean README | 🟨 package scan clean, README describes the architecture; AI review not yet tried |
+| ⭐ Final-ready | Nothing layout-specific in the code; passes the AI review; clean README | 🟨 package scan clean before every test run; README describes the architecture; AI review not yet tried (no `atira submit` yet) |
 
 ## Milestones
 
@@ -27,14 +27,29 @@ Status: ⬜ open · 🟨 in progress · ✅ done · ⛔ blocked
 | # | Milestone | Done when | Status |
 |---|---|---|---|
 | M0 | Setup | CLI, team, repo, Entire hooks, scouting of the four sites | ✅ |
-| M1 | Walking skeleton | The agent logs into all 4 sites in parallel, reads the brief and **submits a signed bid** (even partial) in a test run, end to end | 🟨 local runs reach a bid; the signed submission is being tested in the sandbox now |
-| M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 positions, revisions, requirements, materials, prices, discount ✅ · bidder Q&A answers, end reserves, metal index ⬜ (Puneetha) |
-| M3 | Calculator correct | All rules implemented and unit-tested; a complete bid from correct facts | ✅ 100/100 against our reference answer, rule-by-rule test suite · latent edge cases open (Vamshidhar) |
-| M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | ⬜ |
-| M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | ⬜ |
-| M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | ⬜ |
+| M1 | Walking skeleton | The agent logs into all 4 sites in parallel, reads the brief and **submits a signed bid** (even partial) in a test run, end to end | ✅ 17:34: signed and eligible in the sandbox (form ~2 min, signing code read in 8 s) |
+| M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 revisions, requirements, materials, prices ✅. Open: positions and bidder Q&A (tender-portal tab failing in the sandbox → tab renewal + Q&A fixes now under test), end reserves and metal index (mail), ERP free stock, mailbox address |
+| M3 | Calculator correct | All rules implemented and unit-tested; a complete bid from correct facts | ✅ 100/100 against our reference answer, also after every merge · latent edge cases open (Vamshidhar) |
+| M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | ⬜ blocked by M2 |
+| M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | 🟨 robustness parts done: timeouts, tab renewal, submit reserve; quality and speed not yet |
+| M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | ⬜ cut-off time still unknown |
 
-**Approach:** Phase 1, a brute-force solution, is done (it scored 100 in a test run but as a fixed script with 0 model calls, so it is **not submittable** under fair play and was never submitted). **Phase 2, the model-directed solution, is in progress** (M1–M5).
+## Timeline and approach (10 Oct, local time)
+
+| Time | What happened | Lesson |
+|---|---|---|
+| 11:35–13:35 | Repo, Entire for all coding agents, starter kit, 4 browsers (Vamshidhar); scouting of all four sites (Maria) | Every site uses the same trap types: hidden decoys, invisible characters, popups, old records shown first |
+| 14:00–14:20 | **Phase 1, brute force:** a fixed script scored 100 in a test run with **0 model calls** | Too easy to be allowed: fair play requires the model to decide. Never submitted |
+| 15:05–15:34 | **Phase 2, model-directed refactor:** site agents + shared case file + deterministic calculator + submitter (Vamshidhar) | The architecture to build on |
+| 15:30–16:20 | Reference answer computed twice (identical, later confirmed 100 by Atira); local scorer; calculator verified 100/100; local runs 25 → 15 → 30 | Measuring against a known answer turns guesses into a field-by-field to-do list |
+| 16:00–16:20 | Fixes: mail access-check loop, failed extractions re-fileable, thinking off for navigation | Speed changes need a re-measure: one cut the extraction timeouts and lowered the score |
+| 16:32 | Sandbox run 1: tender agent never took a step; run frozen; cancelled | One hung agent can freeze the whole run → timeouts everywhere |
+| 16:52 | Sandbox run 2: quality 0, **never signed**: investigation used 14 min, the signing-code courier stuck on a broken tab | The form takes 2 min; time is lost before and after it → submit reserve, fresh courier tab |
+| 17:21 | Sandbox run 3: **eligible, quality 10**, signed in 13.4 min, but **empty**: the tender tab failed for 10 min | A tab can break while the site is fine → automatic tab renewal |
+| 17:30–17:50 | Validator, sanity plugins against invented values, Puneetha's Q&A fixes merged; a committed merge conflict found and repaired | Run every check after pulling, not only before |
+| ~17:50 | Sandbox run 4 (everything combined) | Running |
+
+**Approach so far:** build the simplest end-to-end path first (signed bid), then measure every run against the known answer, fix the stage that loses the most points, and keep every fix generic, because the final runs on websites we have never seen.
 
 ## Pipeline stages
 
@@ -46,14 +61,14 @@ Brief -> 4 site agents in parallel -> case file (evidence) -> calculator -> vali
 | Stage | Module | Done when | Status |
 |---|---|---|---|
 | Brief reader | `casefile.read_context` | Tender, scenario date, company, VAT id and authorised senders come from the run brief, never from code | ✅ |
-| Page renderer | `browser_env.Tab.observe` | Pages read as a human sees them (labels, tooltips, collapsed sections, frames); hidden decoys and invisible characters dropped | ✅ works on all four sites; all regression tests in `test_browser_env.py` pass (since 277bf35) |
-| Helpers | `browser_env`, `worker` actions | Popups, access checks (incl. several per page), errors, expired sessions, paging, file downloads | 🟨 mail access-check loop fixed; section toggles clickable |
-| Site agents | `agent.py` + `worker.Agent` | The model decides where to go; each agent finishes its site in < 5 min | 🟨 ~14 min for all four; Q&A coverage open |
-| Case file | `casefile.CaseFile` | Facts with provenance; exact reference, authorised sender, latest record no later than the scenario date | ✅ picks the right records on our reference data; failed extractions are now retried |
+| Page renderer | `browser_env.Tab.observe` | Pages read as a human sees them (labels, tooltips, collapsed sections, frames); hidden decoys and invisible characters dropped | ✅ all regression tests pass |
+| Helpers | `browser_env`, `worker` actions | Popups, access checks (incl. several per page), errors, expired sessions, paging, file downloads, broken tabs | 🟨 access checks ✅, 45 s step timeouts ✅, tab renewal after 2 failed loads (new, under test) |
+| Site agents | `agent.py` + `worker.Agent` | The model decides where to go; each agent finishes its site in < 5 min | 🟨 supplier, ERP, mail fast in the sandbox; tender portal unreliable; Q&A coverage fixes under test |
+| Case file | `casefile.CaseFile` | Facts with provenance; exact reference, authorised sender, latest record no later than the scenario date | ✅ failed or empty extractions retried; Q&A cannot close without answers · open: ERP free stock, duplicate question ids |
 | Calculator | `calculator.py` | All rules, Decimal, half-up, largest-remainder allocation; the model never does arithmetic | ✅ |
-| Validator | `validate.check` (called in `agent.py` before submitting) | Schema, arithmetic consistency, no extra or duplicate positions, bid / no_bid logic, before submitting | ✅ built 16:55, 8 tests; no model calls |
-| Submitter | `submit.py` | Bid form filled from the brief's steps, TAN requested last, signed | 🟨 under test in the sandbox now |
-| Time guard | `agent.py` (`hard_stop`, `submit_reserve`) | Unfinished positions omitted and the bid still signed before 20 min | 🟨 budget exists; not tested with a forced short deadline |
+| Validator | `validate.check` | Schema, arithmetic, no extra or duplicate positions, bid / no_bid logic | ✅ (plugin `validator`) |
+| Submitter | `submit.py` | Bid form filled from the brief's steps, TAN requested last, signed | ✅ signed in the sandbox (run 3); pre-submit review + typing guard added since |
+| Time guard | `agent.py`, `worker.py` | A partial bid is still signed before 20 min | ✅ in practice: investigation stops with 8 min left; run 3 signed at 13.4 min · not yet tested with a forced short deadline |
 
 ## Sanity checks (plugins, `starter-kit/sanity.py`)
 
