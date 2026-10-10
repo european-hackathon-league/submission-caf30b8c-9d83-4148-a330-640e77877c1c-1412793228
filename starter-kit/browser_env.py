@@ -318,6 +318,8 @@ class Tab:
         self.events: list[str] = []
         self.bad_status = 0
         self.loading: set = set()  # page, frame and data requests that have not come back yet
+        self.spares: list = []  # browser contexts of the run's other browsers, for a renewal elsewhere (see renew)
+        self.renewals = 0
         self._watch(page)
 
     def _watch(self, page) -> None:
@@ -330,16 +332,29 @@ class Tab:
     async def renew(self) -> str:
         """Swap a broken tab for a fresh one in the same browser: same session and cookies, a clean page. A tab can get
         stuck ("frame was detached", loads that never finish) while the website itself is fine: in sandbox runs the
-        investigators' tab kept timing out for minutes while a fresh tab on the same site loaded at once."""
+        investigators' tab kept timing out for minutes while a fresh tab on the same site loaded at once.
+        From the second renewal on, the fresh tab opens in another of the run's browsers and logs in again: in sandbox
+        runs 41a5de64, c3c4b1e8 and 64397a5e one browser could not load the tender portal for the whole run, fresh
+        tabs in it included, while the other browsers kept working."""
         old = self.page
-        page = await old.context.new_page()
+        self.renewals += 1
+        moved = self.renewals >= 2 and bool(self.spares)
+        context = self.spares[(self.renewals - 2) % len(self.spares)] if moved else old.context
+        page = await context.new_page()
         self.page, self.frames, self.loading, self.bad_status = page, [], set(), 0
         self._watch(page)
         try:
             await old.close()
         except Exception:  # noqa: BLE001
             pass
-        return await self.goto(self.base_url + "/")
+        result = await self.goto(self.base_url + "/")
+        if not moved:
+            return result
+        try:
+            result += "; " + await self.login()
+        except Exception as error:  # noqa: BLE001
+            result += f"; logging in again failed: {str(error)[:120]}"
+        return "moved to another browser (this one could not load the website): " + result
 
     async def _on_dialog(self, dialog):
         self.events.append(f'the browser asked "{dialog.message}" ({dialog.type}); it was accepted')

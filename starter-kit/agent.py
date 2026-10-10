@@ -212,6 +212,8 @@ async def open_tabs(playwright, sites: list[dict]) -> tuple[list, dict[str, Tab]
     for index, site in enumerate(sites):
         page = pages[index] if index < len(pages) else await pages[-1].context.new_page()
         tabs[site["siteId"]] = Tab(page, site)
+    for tab in tabs.values():  # where a tab may move when its own browser cannot load its website (Tab.renew)
+        tab.spares = [page.context for page in pages if page.context is not tab.page.context]
     return opened, tabs
 
 
