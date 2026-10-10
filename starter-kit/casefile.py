@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -198,23 +199,32 @@ class CaseFile:
             self.filed.add(digest)
             self.pending += 1
             fresh += 1
-            asyncio.ensure_future(self._extract(kind, page, source, agent))
+            folder = os.environ.get("AGENT_DOCS_DIR")  # local tuning only: keep what was filed, for replaying extraction
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+                with open(os.path.join(folder, f"{len(self.filed):03d}-{kind}-{digest[:8]}.json"), "w", encoding="utf-8") as out:
+                    json.dump({"kind": kind, "source": source, "agent": agent, "text": page}, out, ensure_ascii=False)
+            asyncio.ensure_future(self._extract(kind, page, source, agent, digest))
         if not fresh:
             return f"this document is already filed as {kind}"
         return (f"filed {len(text)} characters ({fresh} page(s)) from {source} as {kind}; the facts in it will be "
                 "reported to you")
 
-    async def _extract(self, kind: str, text: str, source: str, agent: str) -> None:
+    async def _extract(self, kind: str, text: str, source: str, agent: str, digest: str = "") -> None:
         try:
             prompt = (f"TASK BRIEF\n{self.brief}\n\nThe tender reference is {self.reference}; the scenario date is "
                       f"{self.scenario.isoformat()}.\n\nKIND OF RECORD: {kind}\nSHAPE\n{SHAPES[kind]}\n\n"
                       f"EVIDENCE (from {source})\n{text[:60000]}")
             data = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
-                                       think=True, max_tokens=8000, label=f"extract:{kind}")
+                                       think=True, max_tokens=8000, label=f"extract:{kind}",
+                                       provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
             summary = self.merge(kind, data) if data else "the extraction failed; file the document again"
             print(f"[extract {kind}] {source} -> {json.dumps(data, ensure_ascii=False)[:1800]}", flush=True)
         except Exception as error:  # noqa: BLE001
+            data = None
             summary = f"the extraction failed ({str(error)[:120]}); file the document again"
+        if not data:
+            self.filed.discard(digest)  # so that filing it again is accepted rather than refused as a duplicate
         self.news.setdefault(agent, []).append(f"From the {kind} document you filed ({source}): {summary}")
         self.pending -= 1
         self._bump()

@@ -36,13 +36,39 @@ _warm = {"done": False}
 _bound: dict = {}  # the client and the gate belong to one event loop; another loop (tests) gets its own
 
 
-def _session() -> tuple[AsyncOpenAI, asyncio.Semaphore]:
+def _load_local_env() -> None:
+    """Local development only: KEY=VALUE lines from the repo root's .env.local (never shipped: it sits outside the
+    package folder). Values already in the environment win. Nothing is printed."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.local")
+    if not os.path.isfile(path):
+        return
+    for line in open(path, encoding="utf-8"):
+        name, sep, value = line.strip().partition("=")
+        if sep and name and not name.startswith("#"):
+            os.environ.setdefault(name.strip(), value.strip().strip('"'))
+
+
+_load_local_env()
+
+# Fact extraction can go to OpenAI instead of the hosted Qwen: EXTRACT_PROVIDER=openai and OPENAI_MODEL=<model>.
+# In a run, OPENAI_BASE_URL points at the metering proxy and the key is the team secret OPENAI_API_KEY.
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "")
+
+
+def _session(provider: str = "qwen") -> tuple[AsyncOpenAI, asyncio.Semaphore]:
     loop = asyncio.get_running_loop()
     if _bound.get("loop") is not loop:
-        client = AsyncOpenAI(base_url=os.environ["QWEN_BASE_URL"], api_key=os.environ["QWEN_API_KEY"],
-                             timeout=CALL_TIMEOUT, max_retries=0)  # the retries are ours, so that they are counted
-        _bound.update(loop=loop, client=client, gate=asyncio.Semaphore(MAX_CONCURRENT))
-    return _bound["client"], _bound["gate"]
+        _bound.clear()
+        _bound["loop"] = loop
+    if provider not in _bound:
+        if provider == "openai":
+            client = AsyncOpenAI(base_url=os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1",
+                                 api_key=os.environ["OPENAI_API_KEY"], timeout=CALL_TIMEOUT, max_retries=0)
+        else:
+            client = AsyncOpenAI(base_url=os.environ["QWEN_BASE_URL"], api_key=os.environ["QWEN_API_KEY"],
+                                 timeout=CALL_TIMEOUT, max_retries=0)  # the retries are ours, so that they are counted
+        _bound[provider] = (client, asyncio.Semaphore(MAX_CONCURRENT))
+    return _bound[provider]
 
 
 def parse_json_object(text: str | None) -> dict | None:
@@ -74,22 +100,26 @@ def parse_json_object(text: str | None) -> dict | None:
     return None
 
 
-def _count(usage) -> None:
+def _count(usage, provider: str = "qwen") -> None:
     if usage is None:
+        return
+    if provider != "qwen":  # priced differently: kept apart from the Qwen estimate
+        STATS[f"{provider}_tokens"] = STATS.get(f"{provider}_tokens", 0) + (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
         return
     STATS["prompt_tokens"] += usage.prompt_tokens or 0
     STATS["completion_tokens"] += usage.completion_tokens or 0
     STATS["cached_tokens"] += getattr(usage.prompt_tokens_details, "cached_tokens", None) or 0
 
 
-async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int = 6000, label: str = "") -> dict:
+async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int = 6000, label: str = "",
+                    provider: str = "qwen") -> dict:
     """One chat call that answers with a JSON object. {} when every attempt failed; it never raises.
 
     `think` turns the model's reasoning on or off: off is about twice as fast, for the easy steps. `label` names the
     caller in the failure lines on stderr.
     """
     try:
-        client, gate = _session()
+        client, gate = _session(provider)
     except KeyError as missing:
         STATS["failed"] += 1
         print(f"[llm] {label or 'call'}: {missing} is not set, no model to ask", file=sys.stderr)
@@ -102,10 +132,16 @@ async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int
                 STATS["calls"] += 1
                 started = time.monotonic()
                 try:
-                    reply = await asyncio.wait_for(client.chat.completions.create(
-                        model=MODEL, messages=conversation, temperature=0, max_tokens=max_tokens,
-                        response_format={"type": "json_object"},
-                        extra_body={"chat_template_kwargs": {"enable_thinking": think}}),
+                    if provider == "openai":
+                        request = client.chat.completions.create(
+                            model=OPENAI_MODEL, messages=conversation, max_completion_tokens=max_tokens,
+                            response_format={"type": "json_object"})
+                    else:
+                        request = client.chat.completions.create(
+                            model=MODEL, messages=conversation, temperature=0, max_tokens=max_tokens,
+                            response_format={"type": "json_object"},
+                            extra_body={"chat_template_kwargs": {"enable_thinking": think}})
+                    reply = await asyncio.wait_for(request,
                         WARM_TIMEOUT if _warm["done"] and not think else CALL_TIMEOUT)
                     _warm["done"] = True
                 finally:
@@ -114,7 +150,7 @@ async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int
                     kind = BY_LABEL.setdefault(label.split(":")[0] if label.startswith("extract") else (label or "call"), [0, 0.0])
                     kind[0] += 1
                     kind[1] += spent
-            _count(reply.usage)
+            _count(reply.usage, provider)
             choice = reply.choices[0]
             content = choice.message.content or ""
             parsed = parse_json_object(content)
@@ -152,4 +188,5 @@ def summary() -> str:
     return (f"LLM: {STATS['calls']} calls ({STATS['failed']} failed), {STATS['prompt_tokens']} prompt tokens "
             f"({STATS['cached_tokens']} cached), {STATS['completion_tokens']} completion tokens, "
             f"{STATS['seconds']:.0f} s in calls, about ${cost:.4f}; by caller: "
-            + ", ".join(f"{name} {calls}x/{seconds:.0f}s" for name, (calls, seconds) in sorted(BY_LABEL.items())))
+            + ", ".join(f"{name} {calls}x/{seconds:.0f}s" for name, (calls, seconds) in sorted(BY_LABEL.items()))
+            + (f"; openai tokens {STATS['openai_tokens']}" if STATS.get("openai_tokens") else ""))
