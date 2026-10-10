@@ -57,9 +57,13 @@ How to work
 - Every turn starts with the case file and the OPEN QUESTIONS. Work on the questions your website can answer;
   the other agents handle the rest. Facts they file show up in the case file and can open new questions for you.
 - You remember only the page in front of you: file a relevant page with keep BEFORE you leave it. keep files the
-  whole document, also what was cut from your view. File a document once, with the right kind.
+  whole document, also what was cut from your view. File a document once, with the right kind. Facts on a page only
+  enter the CASE FILE when you call keep on that page; reading a value in your thought without calling keep leaves
+  the case file unchanged.
 - File pages that state the facts themselves (an opened document, record or message), not menus or hit lists.
-  For a paged list or document that matters, use collect so that no page is missed, then keep it.
+  For a paged list or document that matters, use collect so that no page is missed, then keep it. For stock
+  availability, drill down from plant/physical summaries into storage locations to view freely available
+  (unrestricted) stock excluding blocked/inspection stock, and file that page with keep.
 - The websites hold traps: superseded revisions, look-alike records for other tender references, drafts and
   previews, blocked materials, future-dated records, values in the wrong unit or number format. Check dates,
   references, senders and status marks before you rely on a record, and follow the brief's rules on which one
@@ -122,26 +126,33 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         text += "\n".join(f"- [{qid}] {question}" for qid, question in questions) or "(none)"
         if news:
             text += "\n\nNEWS FROM YOUR FILED DOCUMENTS\n" + "\n".join(f"- {item}" for item in news)
-        if case.pending:
-            text += f"\n\n({case.pending} filed document(s) are still being read.)"
+        own_pending = case.pending_for(name)
+        if own_pending:
+            text += f"\n\n({own_pending} filed document(s) are still being read.)"
+        elif case.pending:
+            text += f"\n\n({case.pending} document(s) filed by other agents are still being read.)"
         return text
 
     agent: Agent
 
     async def keep(action: dict) -> str:
         document, source = agent.document()
-        return case.file(str(action.get("kind", "")), document, source, name)
+        res = case.file(str(action.get("kind", "")), document, source, name)
+        if res.startswith("this document is already filed"):
+            res += "; do not file this same page again — check OPEN QUESTIONS for what is missing on another page, or finish with done"
+        return res
 
     async def answer(action: dict) -> str:
-        # A completion action can arrive in the same turn as `keep`. Wait for the extraction
-        # result instead of letting the model repeat a completion that cannot yet succeed.
-        while case.pending and time.time() < deadline:
+        # A completion action can arrive in the same turn as `keep`. Wait for this agent's own
+        # extraction result (up to 45 s) instead of blocking on slow extractions from other websites.
+        wait_until = min(deadline, time.time() + 45.0)
+        while case.pending_for(name) and time.time() < wait_until:
             version = case.version
-            if case.pending:
-                await case.wait_change(version, min(1.0, max(0.0, deadline - time.time())))
-        if case.pending:
+            if case.pending_for(name):
+                await case.wait_change(version, min(1.0, max(0.0, wait_until - time.time())))
+        if case.pending_for(name):
             return "Evidence extraction is still pending and the investigation deadline is near; do not repeat this answer action."
-        return case.answer(str(action.get("question", "")).strip("[] "), str(action.get("status", "")), str(action.get("note", "")))
+        return case.answer(str(action.get("question", "")).strip("[] "), str(action.get("status", "")), str(action.get("note", "")), agent=name)
 
     # Navigation runs without the model's thinking: about twice as fast. The facts themselves are read by the
     # extraction calls in casefile.py, which keep thinking on. AGENT_THINK=1 turns it back on for comparison.

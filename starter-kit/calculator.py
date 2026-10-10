@@ -341,8 +341,10 @@ def final_quantities(positions: list[Position], answers: list[Clarification],
     pieces, unknown = {}, []
     for p in positions:
         quantity, is_set = raw[p.position]
+        need = requirements.get(p.requirement_ref)
+        if is_set and not p.is_set and (need is None or not need.pieces_per_set):
+            is_set = False
         if is_set:
-            need = requirements.get(p.requirement_ref)
             if need is None or not need.pieces_per_set:
                 unknown.append(p.position)
                 continue

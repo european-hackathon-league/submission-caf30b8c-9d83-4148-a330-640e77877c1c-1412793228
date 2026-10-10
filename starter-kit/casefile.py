@@ -43,6 +43,7 @@ How to extract
   lists). Never invent, convert or calculate.
 - Evidence can contain drafts, previews, templates, examples, look-alike records for other references and
   superseded content. Extract the authoritative original and set the flags that tell them apart.
+- Keep your thinking brief and focused only on the records visible in the evidence; do not restate brief rules that do not apply to this page.
 Reply with one JSON object of the requested shape and nothing else."""
 
 SHAPES = {
@@ -53,7 +54,7 @@ SHAPES = {
     "clarifications": """Answers of the tender's bidder Q&A. One entry per answer; an answer that changes nothing still gets an entry.
 {"answers": [{"number": "<answer number>", "timestamp": "<when it was issued>",
   "withdraws": ["<number of an earlier answer this one withdraws>"],
-  "quantity_changes": [{"position": "<position>", "quantity": <new binding quantity>, "unit_is_set": <true|false|null if the unit is not restated>}],
+  "quantity_changes": [{"position": "<position>", "quantity": <new binding quantity>, "unit": "<unit as written, or null>", "unit_is_set": <true ONLY if the unit counts sets/kits of several pieces, false if it counts single pieces, null if no unit is stated>}],
   "tech_amendments": [{"revision": "<specification revision it names>", "requirement_ref": "<requirement>",
      "attribute": "stroke|bore|pressure|mounting|certification", "value": "<new value, number without unit for the first three>"}],
   "assignments": [{"position": "<position>", "condition_group": "<key or null>", "packaging_tariff": "<key or null>",
@@ -79,7 +80,7 @@ A key the answer says does not apply ("no pool", "no bonus") is null.""",
   "allocation_mass": "<mass used to allocate shared setup cost, as written, or null>", "allocation_mass_unit": "mg|g|kg|t",
   "surcharge_mass": "<mass the metal surcharge is charged on, as written, or null>", "surcharge_mass_unit": "mg|g|kg|t",
   "metal_index_code": "<price index code or null>", "number_format": "de-DE|en-US",
-  "free_stock": <total freely available stock in pieces across storage locations; prefer a stated total; int|null>,
+  "free_stock": <freely available / unrestricted stock in pieces (e.g. 'Frei verwendbar' or 'Verfügbarer Gesamtbestand'), EXCLUDING blocked/inspection/reserved stock ('Prüfbestand', 'Gesperrt'). If the page only shows total physical stock ('Physischer Bestand') or says to open storage locations for availability, MUST be null; int|null>,
   "stock_lead_weeks": <delivery time from stock in weeks, int|null>,
   "production_lead_weeks": <production lead time in weeks, int|null>}]}""",
     "price_conditions": """Price conditions (condition records with validity and quantity scales) of ONE material.
@@ -117,6 +118,9 @@ CONTEXT_SHAPE = """From the task brief, as JSON:
    "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."}}
 The local part is what stands before the @; null for a topic the brief names no sender for."""
 
+_PIECE_UNITS = {"stk", "stk.", "st", "st.", "stück", "stueck", "pc", "pcs", "pcs.", "piece", "pieces", "ea", "each", "einzelstück", "einzelstueck"}
+_SET_UNITS = {"satz", "sätze", "saetze", "set", "sets", "kit", "kits"}
+
 
 def _int(value) -> int | None:
     number = parse_number(value)
@@ -126,6 +130,34 @@ def _int(value) -> int | None:
 def _text(value) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text if text and text.lower() not in ("null", "none", "n/a", "-", "—") else None
+
+
+def _resolve_is_set(unit, flag) -> bool | None:
+    text = (_text(unit) or "").lower()
+    if text in _PIECE_UNITS:
+        return False
+    if text in _SET_UNITS:
+        return True
+    return flag if isinstance(flag, bool) else None
+
+
+def _strip_physical_only_stock(text: str, data: dict | None) -> str:
+    """Reject free_stock extracted from a plant-level physical summary that has not opened storage locations."""
+    if not isinstance(data, dict) or not isinstance(data.get("materials"), list):
+        return ""
+    lower = (text or "").lower()
+    has_physical = any(term in lower for term in ("physischer bestand", "einschließlich prüfbestand", "physical stock"))
+    has_free = any(term in lower for term in ("frei verwendbar", "verfügbarer gesamtbestand", "freier bestand",
+                                              "frei verfügbar", "unrestricted", "free stock", "available stock"))
+    if not has_physical or has_free:
+        return ""
+    stripped = False
+    for row in data["materials"]:
+        if isinstance(row, dict) and row.get("free_stock") is not None:
+            row.pop("free_stock", None)
+            stripped = True
+    return ("physical stock includes blocked/inspection stock — open the storage locations / availability "
+            "breakdown to find and file freely available stock") if stripped else ""
 
 
 RECORD_LISTS: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -207,10 +239,16 @@ class CaseFile:
         self.filed: set[str] = set()
         self.news: dict[str, list[str]] = {}
         self.pending = 0
+        self.pending_by_agent: dict[str, int] = {}
         self.version = 0
         self._changed = asyncio.Event()
 
     # ---- filing evidence -------------------------------------------------------------------------------------
+
+    def pending_for(self, agent: str | None = None) -> int:
+        if agent is None:
+            return self.pending
+        return self.pending_by_agent.get(agent, 0)
 
     def _bump(self) -> None:
         self.version += 1
@@ -252,6 +290,7 @@ class CaseFile:
                 continue
             self.filed.add(digest)
             self.pending += 1
+            self.pending_by_agent[agent] = self.pending_by_agent.get(agent, 0) + 1
             fresh += 1
             if folder:  # local tuning only: preserve the exact evidence that was filed, one page per file
                 filename = f"{len(self.filed):03d}-{kind}-{digest[:8]}.json"
@@ -270,13 +309,17 @@ class CaseFile:
                       f"{self.scenario.isoformat()}.\n\nKIND OF RECORD: {kind}\nSHAPE\n{SHAPES[kind]}\n\n"
                       f"EVIDENCE (from {source})\n{text[:60000]}")
             raw = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
-                                      think=True, max_tokens=8000, label=f"extract:{kind}",
+                                      think=True, max_tokens=12000, label=f"extract:{kind}",
                                       provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
             data, validation = validate_extraction(kind, raw)
+            stock_note = _strip_physical_only_stock(text, data) if kind == "material" else ""
+            if stock_note:
+                validation = f"{validation}; {stock_note}" if validation else stock_note
             summary = self.merge(kind, data) if data else (validation or "the extraction failed; file the document again")
             if data and summary == "nothing usable was found in it":
                 data = None
-                summary = "no usable records were extracted; check the evidence and file it again"
+                summary = (f"{stock_note}; no usable records were extracted" if stock_note
+                           else "no usable records were extracted; check the evidence and file it again")
             elif validation and data:
                 summary = validation + "; " + summary
             if data:
@@ -289,7 +332,12 @@ class CaseFile:
         if not data:
             self.filed.discard(digest)  # so that filing it again is accepted rather than refused as a duplicate
         self.news.setdefault(agent, []).append(f"From the {kind} document you filed ({source}): {summary}")
-        self.pending -= 1
+        self.pending = max(0, self.pending - 1)
+        left = self.pending_by_agent.get(agent, 0) - 1
+        if left > 0:
+            self.pending_by_agent[agent] = left
+        else:
+            self.pending_by_agent.pop(agent, None)
         self._bump()
 
     def merge(self, kind: str, data: dict) -> str:
@@ -445,7 +493,8 @@ class CaseFile:
     def inputs(self) -> SimpleNamespace:
         governing = self.governing_revision()
         positions = [Position(key, _text(row.get("requirement_ref")) or "", _int(row.get("quantity")) or 0,
-                              bool(row.get("unit_is_set")), _text(row.get("description")) or "")
+                              bool(_resolve_is_set(row.get("unit"), row.get("unit_is_set"))),
+                              _text(row.get("description")) or "")
                      for key, row in sorted(self.positions.items())]
         clarifications = []
         for key, row in self.clarifications.items():
@@ -454,7 +503,8 @@ class CaseFile:
             for change in row.get("quantity_changes") or []:
                 quantity = _int(change.get("quantity"))
                 if _text(change.get("position")) and quantity is not None:
-                    entry.quantity_changes.append((change["position"].strip(), quantity, change.get("unit_is_set")))
+                    entry.quantity_changes.append((change["position"].strip(), quantity,
+                                                   _resolve_is_set(change.get("unit"), change.get("unit_is_set"))))
             for change in row.get("tech_amendments") or []:
                 if _text(change.get("requirement_ref")) and _text(change.get("attribute")) and change.get("value") is not None:
                     entry.amendments.append((_text(change.get("revision")) or "", change["requirement_ref"].strip(),
@@ -596,14 +646,14 @@ class CaseFile:
                                                   f"{condition.fx_key} ({condition.currency}, material {material.number}).")
         return found
 
-    def answer(self, question: str, status: str, note: str) -> str:
+    def answer(self, question: str, status: str, note: str, agent: str | None = None) -> str:
         """An agent closes a question: its evidence is complete, or the thing does not exist."""
         open_ids = {qid for qid, _ in self.questions()}
         if question not in open_ids:
             return f'"{question}" is not an open question'
         if status not in ("complete", "absent"):
             return 'status must be "complete" or "absent"'
-        if self.pending:
+        if self.pending_for(agent):
             return "facts from documents you filed are still being extracted; wait for them, then answer"
         if question == "clarifications" and status == "complete" and not self.clarifications:
             return "no Q&A answers have been extracted yet; reopen the Q&A evidence, file it as clarifications, and wait for the extraction result"

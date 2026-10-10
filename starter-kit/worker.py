@@ -142,6 +142,7 @@ class Agent:
             except asyncio.TimeoutError:
                 results.append(f"opening {self.tab.base_url} took longer than {STEP_TIMEOUT} s; reload or try again")
         repeats, last_signature, failures = 0, "", 0
+        seen_signatures: dict[str, int] = {}
         stuck = 0  # page reads and navigations in a row that timed out or failed: the tab may be broken
         while self.steps < self.max_steps and time.time() < self.deadline:
             self.steps += 1
@@ -167,6 +168,9 @@ class Agent:
             if isinstance(actions, dict):
                 actions = [actions]
             if not isinstance(actions, list) or not actions:
+                if llm._warm.get("expired"):
+                    self.log("run token expired (submission completed); stopping")
+                    break
                 failures += 1
                 if failures >= 4:
                     self.log("the model gave no usable actions four times; stopping")
@@ -186,7 +190,8 @@ class Agent:
             # A repeated action is a loop only if the model also sees the same
             # page.  A form may keep its URL while legitimately changing state.
             signature = json.dumps(actions, sort_keys=True) + state_fingerprint(page)
-            repeats = repeats + 1 if signature == last_signature else 0
+            seen_signatures[signature] = seen_signatures.get(signature, 0) + 1
+            repeats = repeats + 1 if signature == last_signature else max(0, seen_signatures[signature] - 1)
             last_signature = signature
 
             results, finished, moved = [], None, False

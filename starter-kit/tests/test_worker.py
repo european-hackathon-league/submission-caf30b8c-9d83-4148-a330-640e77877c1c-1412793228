@@ -67,5 +67,188 @@ class ActionVerification(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state_fingerprint(first), state_fingerprint(reread))
 
 
+class LoopDetectionAndChaining(unittest.IsolatedAsyncioTestCase):
+    """Tests for repeated-action loop warnings, stale-ID chaining protection, and stuck-tab renewal."""
+
+    async def test_repeating_same_action_on_unchanged_page_injects_loop_warning_on_third_repeat(self):
+        tab = FakeTab(change_on_fill=False)
+        replies = [
+            {"thought": "try 1", "actions": [{"do": "fill", "id": 1, "text": "Same"}]},
+            {"thought": "try 2", "actions": [{"do": "fill", "id": 1, "text": "Same"}]},
+            {"thought": "try 3", "actions": [{"do": "fill", "id": 1, "text": "Same"}]},
+            {"thought": "stop", "actions": [{"do": "done", "summary": "stopped"}]},
+        ]
+        asked = []
+
+        async def model(messages, **kwargs):
+            asked.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("loop-test", tab, "system", lambda: "job", max_steps=6).run()
+        self.assertTrue(outcome["done"])
+        self.assertNotIn("You have sent the same actions three times", asked[2])
+        self.assertIn("You have sent the same actions three times with the same result", asked[3])
+
+    async def test_actions_after_a_navigating_action_are_skipped_because_ids_are_stale(self):
+        tab = FakeTab(change_on_fill=True)
+
+        async def click(aid):
+            tab.view = 'url: http://portal.test/step2\ntitle: Step 2\n[9] button "Next"'
+            tab.page.url = "http://portal.test/step2"
+            return f"clicked [{aid}]"
+
+        tab.click = click
+        replies = [
+            {"thought": "click then fill", "actions": [
+                {"do": "click", "id": 1},
+                {"do": "fill", "id": 9, "text": "stale"},
+            ]},
+            {"thought": "done", "actions": [{"do": "done", "summary": "ok"}]},
+        ]
+        asked = []
+
+        async def model(messages, **kwargs):
+            asked.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("chain-test", tab, "system", lambda: "job", max_steps=4).run()
+        self.assertTrue(outcome["done"])
+        self.assertIn("the page changed, its ids are stale", asked[1])
+
+    async def test_two_consecutive_navigation_failures_trigger_tab_renew(self):
+        tab = FakeTab(change_on_fill=False)
+        renew_calls = []
+
+        async def failing_click(aid):
+            return f"click [{aid}] failed: Page.click: net::ERR_ABORTED; maybe frame was detached?"
+
+        async def renew():
+            renew_calls.append(True)
+            tab.view = 'url: http://portal.test\ntitle: Fresh\n[1] button "Retry"'
+            return tab.view
+
+        tab.click = failing_click
+        tab.renew = renew
+        replies = [
+            {"thought": "click 1", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "click 2", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "done", "actions": [{"do": "done", "summary": "recovered"}]},
+        ]
+        asked = []
+
+        async def model(messages, **kwargs):
+            asked.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("renew-test", tab, "system", lambda: "job", max_steps=5).run()
+        self.assertTrue(outcome["done"])
+        self.assertEqual(len(renew_calls), 1)
+        self.assertIn("this tab kept failing to load, so it was replaced by a fresh one", asked[2])
+
+
+class TokenCutOffAndTeamWakeup(unittest.IsolatedAsyncioTestCase):
+    """Tests for LLM token-cutoff retry doubling and Agent idle/wakeup lifecycle."""
+
+    async def test_chat_json_doubles_max_tokens_when_finish_reason_is_length(self):
+        requested_tokens = []
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                requested_tokens.append(kwargs.get("max_tokens"))
+                if len(requested_tokens) == 1:
+                    choice = SimpleNamespace(
+                        finish_reason="length",
+                        message=SimpleNamespace(content='{"answers": [{"number": "Q-1"'),
+                    )
+                else:
+                    choice = SimpleNamespace(
+                        finish_reason="stop",
+                        message=SimpleNamespace(content='{"answers": [{"number": "Q-1"}]}'),
+                    )
+                return SimpleNamespace(
+                    usage=SimpleNamespace(prompt_tokens=100, completion_tokens=50, prompt_tokens_details=None),
+                    choices=[choice],
+                )
+
+        fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+        gate = llm.asyncio.Semaphore(4)
+
+        async def fast_sleep(_):
+            return None
+
+        with patch.object(llm, "_session", return_value=(fake_client, gate)), \
+             patch.object(llm.asyncio, "sleep", fast_sleep):
+            result = await llm.chat_json([{"role": "user", "content": "extract"}], max_tokens=8000, label="extract:clarifications")
+        self.assertEqual(result, {"answers": [{"number": "Q-1"}]})
+        self.assertEqual(requested_tokens, [8000, 16000])
+
+    async def test_idle_callback_holds_finished_agent_and_resumes_when_news_arrives(self):
+        tab = FakeTab(change_on_fill=True)
+        idle_responses = ["Open questions remain: data:MAT-101", None]
+        replies = [
+            {"thought": "pause until requirements arrive", "actions": [{"do": "done", "summary": "waiting"}]},
+            {"thought": "now finish", "actions": [{"do": "done", "summary": "all done"}]},
+        ]
+        asked = []
+
+        async def idle_hook(reason: str):
+            return idle_responses.pop(0)
+
+        async def model(messages, **kwargs):
+            asked.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("erp-test", tab, "system", lambda: "job", max_steps=5, idle=idle_hook).run()
+        self.assertTrue(outcome["done"])
+        self.assertEqual(outcome["summary"], "all done")
+        self.assertEqual(outcome["steps"], 2)
+        self.assertIn("Open questions remain: data:MAT-101", asked[1])
+
+    async def test_multi_page_navigation_cycle_triggers_loop_warning_on_third_pass(self):
+        pages = [
+            "url: https://portal.example/q?page=1\n[1] link \"Next\"",
+            "url: https://portal.example/q?page=2\n[1] link \"Prev\"",
+            "url: https://portal.example/q?page=1\n[1] link \"Next\"",
+            "url: https://portal.example/q?page=2\n[1] link \"Prev\"",
+            "url: https://portal.example/q?page=1\n[1] link \"Next\"",
+            "url: https://portal.example/q?page=2\n[1] link \"Prev\"",
+        ]
+        idx = [0]
+
+        class CyclingTab(FakeTab):
+            async def observe(self) -> str:
+                return pages[min(idx[0], len(pages) - 1)]
+
+            async def click(self, aid) -> str:
+                idx[0] += 1
+                self.page.url = f"https://portal.example/q?page={(idx[0] % 2) + 1}"
+                return f"clicked [{aid}]"
+
+        tab = CyclingTab(pages[0])
+        replies = [
+            {"thought": "go p2", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "go p1", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "go p2", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "go p1", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "go p2", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "stop", "actions": [{"do": "done", "summary": "escaped cycle"}]},
+        ]
+        seen_prompts: list[str] = []
+
+        async def model(messages, **kwargs):
+            seen_prompts.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("cycle-test", tab, "system", lambda: "job", max_steps=8).run()
+        self.assertTrue(outcome["done"])
+        self.assertTrue(any("same actions three times" in p for p in seen_prompts))
+
+
 if __name__ == "__main__":
     unittest.main()
+

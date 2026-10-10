@@ -159,6 +159,8 @@ async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int
                 return parsed
             if choice.finish_reason == "length":
                 problem = f"the reply was cut off at {max_tokens} tokens"
+                if max_tokens >= MAX_TOKENS_CEILING:
+                    think = False
                 max_tokens = min(max_tokens * 2, MAX_TOKENS_CEILING)
             else:
                 problem = f"the reply is not a JSON object: {content[:120]!r}"
@@ -169,10 +171,12 @@ async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int
         except APIStatusError as error:
             problem = f"HTTP {error.status_code}: {str(error)[:200]}"
             permanent = error.status_code in PERMANENT
+            if error.status_code == 401 and "finished or expired" in str(error).lower():
+                _warm["expired"] = True
         except Exception as error:  # the connection, the proxy, a reply without choices
             problem = f"{type(error).__name__}: {str(error)[:200]}"
         STATS["failed"] += 1
-        last = attempt == ATTEMPTS or (permanent and attempt >= 2)
+        last = attempt == ATTEMPTS or bool(_warm.get("expired")) or (permanent and attempt >= 2)
         print(f"[llm] {label or 'call'}: attempt {attempt} failed, {problem}" + ("; giving up" if last else ""),
               file=sys.stderr)
         if last:
