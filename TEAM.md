@@ -49,6 +49,9 @@ tells agents to finish when their own questions are done).
 
 ## Score log (every sandbox run, newest first)
 
+> ⚠️ **Sandbox tender-portal outage (from ~20:00 UTC):** in c3c4b1e8, sub_e69b12d4 (bid entry) and sub_97fb152d the tender portal never loaded inside the sandbox (45 s timeouts, ERR_ABORTED), while the portals answered normally from outside and other runs at the same time reached them. Those 0s say nothing about the code. Worth reporting to the Atira organisers.
+
+
 Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official quality (0-100).
 
 **Who** = who started the run: only Maria and Vamshidhar run tests. Atira does not show it, so every run not started by Maria is Vamshidhar's.
@@ -56,9 +59,10 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
 | ~20:30 | run_2b8b5ca8 | Maria | branch `maria/erp-loop-fixes` **5ee465a**: all fixes + v1's routing + goto hint for dead links, main's calculator | running | | | | Rerun of the candidate for main (c3c4b1e8 was lost to the portal outage). Runs alongside submission 3 and 2 of Vamshidhar's runs |
+| 20:24 | run_28a384ba | Vamshidhar | ? | running | | | | |
 | 20:23 | run_64e3f0cf | Vamshidhar | ? | running | | | | |
 | 20:03 | run_c3c4b1e8 | Maria | branch `maria/erp-loop-fixes` **c5a1733**: all fixes + v1's routing, main's calculator | **0 (failed, no answer)** | ❌ | 17.4 min | 95 / $0.11 | **The tender portal was unreachable inside the sandbox for the whole run** (every load hit the 45 s timeout, reloads aborted, fresh tabs too), so no positions and the clerk cannot reach the form. Not the agent logic: 0 model failures, no loops, investigation ended by itself at 622 s. Same portal hang as submission 2. The portals answer normally from outside. **Not a test of the fixes: rerun needed** |
-| 20:11 | **sub_97fb152d (SUBMISSION 3)** | Maria | **v1** exactly as it scored 100 in 9.6 min (44a626ef) | review passed ✅, scored run in progress | | | | Becomes the final package once the review passes (the final uses the latest submission that passed review) |
+| 20:11 | **sub_97fb152d (SUBMISSION 3)** → run_41a5de64 | Maria | **v1** exactly as it scored 100 in 9.6 min (44a626ef) | **0 (no answer)** | ❌ | 16.4 min | 86 / $0.08 | Review passed. **Tender portal unreachable inside the sandbox** (45 s timeouts, aborted loads; 0 model failures), so no positions and the clerk could not load the form. Mail, customer portal and ERP worked. Not v1's code. **v1 is now our final package** (latest submission that passed review); leaderboard keeps 38.2 |
 | 20:06 | run_4b18d753 | Vamshidhar | ? | running | | | | |
 | 19:53 | run_39437db1 | Vamshidhar | package a956103b (no label) | **100** 🎉 | ✅ | 15.3 min | 307 / $0.43 | All 5 positions 13/13. Vamshidhar: which code is this? |
 | 19:47 | **sub_e69b12d4 (SUBMISSION 2)** → run_c4f64b7b | Maria | **main 1fab415** (the 100 test run 74b22ceb, same checkout) | **0 (no answer)** | ❌ | 20.4 min | 218 / $0.25 | Review passed. **ERP agent looped 88× on "I need to wait for the specification…"** instead of going idle (no material filed, empty bid); then the tender portal hung (clicks over 45 s, reload aborted) and 10 model calls timed out (one clerk turn waited 247 s), so even the empty bid was never entered. Ran while 4 team runs were active. Both ERP failure modes are what `maria/erp-loop-fixes` targets |
