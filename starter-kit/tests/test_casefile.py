@@ -26,6 +26,30 @@ class EvidenceProvenance(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["extracted"]["positions"][0]["position"], "1")
         self.assertEqual(json.loads(facts.dump())["evidence"][0]["source"], "https://portal.example/rfq")
 
+    async def test_schema_gate_drops_only_malformed_records_and_keeps_its_log(self):
+        facts = casefile.CaseFile("brief", {"tender_reference": "TEST-0001", "scenario_date": "2030-01-01"})
+
+        async def mixed(*args, **kwargs):
+            return {"positions": [{"position": "1", "quantity": 4}, {"quantity": 9}, "not a record"]}
+
+        with patch.object(llm, "chat_json", mixed):
+            await facts._extract("positions", "Position records", "https://portal.example/rfq", "tender", "mixed")
+        self.assertEqual(set(facts.positions), {"1"})
+        self.assertIn("dropped 2 malformed", facts.evidence[0]["validation"])
+        self.assertIn("dropped 2 malformed", facts.evidence[0]["summary"])
+
+    async def test_schema_gate_rejects_an_invalid_record_list(self):
+        facts = casefile.CaseFile("brief", {"tender_reference": "TEST-0001", "scenario_date": "2030-01-01"})
+
+        async def malformed(*args, **kwargs):
+            return {"positions": "not a list"}
+
+        with patch.object(llm, "chat_json", malformed):
+            await facts._extract("positions", "Position records", "https://portal.example/rfq", "tender", "bad")
+        self.assertEqual(facts.positions, {})
+        self.assertEqual(facts.evidence, [])
+        self.assertIn("schema validation rejected", facts.take_news("tender")[0])
+
 
 if __name__ == "__main__":
     unittest.main()

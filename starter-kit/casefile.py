@@ -128,6 +128,56 @@ def _text(value) -> str | None:
     return text if text and text.lower() not in ("null", "none", "n/a", "-", "—") else None
 
 
+RECORD_LISTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "positions": ("positions", ("position",)),
+    "clarifications": ("answers", ("number",)),
+    "revisions": ("revisions", ("revision",)),
+    "requirements": ("requirements", ("requirement_ref",)),
+    "material": ("materials", ("material_number",)),
+    "price_conditions": ("conditions", ()),
+    "mail": ("messages", ("sender", "timestamp", "subject")),
+}
+
+
+def validate_extraction(kind: str, data) -> tuple[dict | None, str]:
+    """Keep only typed records that can be safely merged without guessing.
+
+    The model remains responsible for understanding the selected evidence.  This
+    deterministic boundary only verifies the response contract before records
+    reach the calculator: a malformed envelope is rejected, while one malformed
+    record cannot poison its well-formed neighbours.  It intentionally does not
+    infer missing values or impose public-portal labels.
+    """
+    if not isinstance(data, dict):
+        return None, "schema validation rejected a non-object extraction"
+    root, identifiers = RECORD_LISTS[kind]
+    rows = data.get(root)
+    if not isinstance(rows, list):
+        return None, f'schema validation rejected {kind}: "{root}" must be a list'
+    valid: list[dict] = []
+    rejected = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            rejected += 1
+            continue
+        # Condition rows identify themselves by their scale list; every other
+        # record has stable source identifiers that the merge layer relies on.
+        identified = isinstance(row.get("scales"), list) if kind == "price_conditions" \
+            else all(_text(row.get(name)) for name in identifiers)
+        if identified:
+            valid.append(row)
+        else:
+            rejected += 1
+    if kind == "requirements" and valid and not _text(data.get("revision")):
+        return None, "schema validation rejected requirements without a revision identifier"
+    if kind == "price_conditions" and valid and not _text(data.get("material_number")):
+        return None, "schema validation rejected price conditions without a material number"
+    clean = dict(data)
+    clean[root] = valid
+    note = "" if not rejected else f"schema validation dropped {rejected} malformed {root} record(s)"
+    return clean, note
+
+
 def _merge(store: dict, key, record: dict) -> None:
     old = store.setdefault(key, {})
     for name, value in record.items():
@@ -219,13 +269,16 @@ class CaseFile:
             prompt = (f"TASK BRIEF\n{self.brief}\n\nThe tender reference is {self.reference}; the scenario date is "
                       f"{self.scenario.isoformat()}.\n\nKIND OF RECORD: {kind}\nSHAPE\n{SHAPES[kind]}\n\n"
                       f"EVIDENCE (from {source})\n{text[:60000]}")
-            data = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
-                                       think=True, max_tokens=8000, label=f"extract:{kind}",
-                                       provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
-            summary = self.merge(kind, data) if data else "the extraction failed; file the document again"
+            raw = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
+                                      think=True, max_tokens=8000, label=f"extract:{kind}",
+                                      provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
+            data, validation = validate_extraction(kind, raw)
+            summary = self.merge(kind, data) if data else (validation or "the extraction failed; file the document again")
+            if validation and data:
+                summary = validation + "; " + summary
             if data:
                 self.evidence.append({"id": digest, "kind": kind, "source": source, "agent": agent,
-                                      "summary": summary, "extracted": data})
+                                      "summary": summary, "validation": validation, "extracted": data})
             print(f"[extract {kind}] {source} -> {json.dumps(data, ensure_ascii=False)[:1800]}", flush=True)
         except Exception as error:  # noqa: BLE001
             data = None

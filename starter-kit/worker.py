@@ -7,8 +7,10 @@ search for, which record matters and when the job is finished are the model's ca
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -51,6 +53,18 @@ Reading the page:
 STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung page must not freeze the whole run
 FULL_TURNS = 2  # how many past turns stay word for word; older ones keep the reasoning and drop the page text
 NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch"}
+
+
+def state_fingerprint(observation: str) -> str:
+    """A stable signature of the model-visible page state.
+
+    ``Tab.observe`` assigns fresh action ids on every read.  They are useful to
+    the model, but must not make an unchanged page look like a successful
+    action.  Removing only those generated ids keeps visible values, errors,
+    dialogs and the URL in the comparison.
+    """
+    stable = re.sub(r"\[\d+\]", "[]", observation)
+    return hashlib.sha1(stable.encode("utf-8", "replace")).hexdigest()
 
 
 class Agent:
@@ -165,7 +179,9 @@ class Agent:
                 with open(os.path.join(os.environ["AGENT_TRACE"], f"{self.name}_{self.steps:03d}.txt"), "w", encoding="utf-8") as handle:
                     handle.write(user + "\n\n===== REPLY =====\n" + json.dumps(reply, ensure_ascii=False, indent=1))
 
-            signature = json.dumps(actions, sort_keys=True) + self.tab.page.url
+            # A repeated action is a loop only if the model also sees the same
+            # page.  A form may keep its URL while legitimately changing state.
+            signature = json.dumps(actions, sort_keys=True) + state_fingerprint(page)
             repeats = repeats + 1 if signature == last_signature else 0
             last_signature = signature
 
@@ -198,6 +214,23 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
+                # Do not trust a successful browser call by itself: enterprise
+                # portals often swallow a click or reject a field silently.
+                # The next model turn gets a compact, actionable state-delta
+                # report rather than assuming the dispatch took effect.
+                if do not in ("collect", "fetch"):
+                    try:
+                        after = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
+                        changed = state_fingerprint(page) != state_fingerprint(after)
+                        if changed:
+                            results.append(f"verification: {do} visibly changed the page state")
+                        else:
+                            results.append(f"verification: {do} caused no visible page change; inspect the control "
+                                           "or try a different recovery path instead of repeating it blindly")
+                    except asyncio.TimeoutError:
+                        results.append(f"verification: could not re-read the page within {STEP_TIMEOUT} s")
+                    except Exception as error:  # noqa: BLE001
+                        results.append(f"verification: could not re-read the page ({str(error)[:160]})")
                 if do in ("collect", "fetch"):
                     self.held = (self.tab.document, self.tab.document_source)
                 elif do in NAVIGATING:

@@ -28,10 +28,13 @@ task brief ──► model reads it: tender, scenario date, authorized senders
 2. **Investigate in parallel.** One agent per website (`worker.Agent`). Each turn it sees its page as accessible
    text with numbered controls (`browser_env.Tab`), plus the case file and its open questions, and answers with
    actions: log in, click, fill, select, search, page through a list, download a file, or `keep` the page as
-   evidence. Nothing in the code knows a URL, a selector or a click path of any website.
+   evidence. After every browser action, a stable accessible-page fingerprint reports whether the page visibly
+   changed, so silent portal failures become recovery hints rather than assumed success. Nothing in the code knows
+   a URL, a selector or a click path of any website.
 3. **File facts.** `keep` hands the page to a second model call that extracts typed records (positions, Q&A
    answers, revisions, requirements, materials, price conditions, mail records). `casefile.CaseFile` merges them
-   and derives what is still unknown. Each successful extraction retains its source URL, site agent, document ID,
+   and derives what is still unknown. A schema gate rejects malformed extraction envelopes and records before the
+   merge. Each successful extraction retains its source URL, site agent, document ID,
    normalized result, and merge summary in the case-file dump, so later agents can assess contradictory evidence.
    A catalogue group found in the specification becomes an ERP question, a key
    in a Q&A answer becomes a mailbox question, and so on. Agents finish when their website has nothing left to add.
@@ -88,7 +91,8 @@ python ../tools/local_run.py --no-submit
 ```
 
 Switches: `AGENT_SKIP_SUBMIT=1` stops before the bid form, `AGENT_SITES=a,b` starts only those site agents,
-`AGENT_MAX_STEPS` caps an agent's turns, `AGENT_DUMP=<file>` writes the case file as JSON.
+`AGENT_MAX_STEPS` caps an agent's turns, `AGENT_DUMP=<file>` writes the case file as JSON, and
+`AGENT_TRACE=<folder>` saves each local agent turn (page, decision and result) for investigation.
 
 ```sh
 uv run python -m unittest discover tests
