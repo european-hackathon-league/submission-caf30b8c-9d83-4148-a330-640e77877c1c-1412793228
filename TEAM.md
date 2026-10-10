@@ -13,10 +13,10 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026,
 
 ## Success levels
 
-| Level | Criterion | Status (18:00) |
+| Level | Criterion | Status (18:15) |
 |---|---|---|
 | 🟢 Minimum | Eligible signed bid (correct tender reference) on the public dataset | ✅ reached 17:34 (test run 6da03229: eligible, quality 10; the bid was signed but empty) |
-| 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | ⬜ best sandbox 10, best local 29.75; sandbox runs take ~13 min |
+| 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | 🟨 **best sandbox 70.7** (run 8184b178, 16.6 min, $0.43): 4 of 5 positions perfect · missing: position 01.01 (~28 pts incl. total + index check), one lead time |
 | 🔵 Target | Quality ≥ 95, < 8 min, low cost (Qwen first), 3 test runs in a row without a crash | ⬜ |
 | ⭐ Final-ready | Nothing layout-specific in the code; passes the AI review; clean README | 🟨 package scan clean before every test run; README describes the architecture; AI review not yet tried (no `atira submit` yet) |
 
@@ -28,9 +28,9 @@ Status: ⬜ open · 🟨 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|
 | M0 | Setup | CLI, team, repo, Entire hooks, scouting of the four sites | ✅ |
 | M1 | Walking skeleton | The agent logs into all 4 sites in parallel, reads the brief and **submits a signed bid** (even partial) in a test run, end to end | ✅ 17:34: signed and eligible in the sandbox (form ~2 min, signing code read in 8 s) |
-| M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 revisions, requirements, materials, prices ✅. Open: positions and bidder Q&A (tender-portal tab failing in the sandbox → tab renewal + Q&A fixes now under test), end reserves and metal index (mail), ERP free stock, mailbox address |
+| M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 nearly: run 8184b178 read positions, Q&A (withdrawn-answer check ✅), discount, materials, prices for 4 of 5 positions. Open: whatever blocks position 01.01, the shared-stock lead time of 01.03, ERP free stock, mailbox address. Sandbox access varies between runs |
 | M3 | Calculator correct | All rules implemented and unit-tested; a complete bid from correct facts | ✅ 100/100 against our reference answer, also after every merge · latent edge cases open (Vamshidhar) |
-| M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | ⬜ blocked by M2 |
+| M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | 🟨 70.7 with 4 of 5 positions; one position away |
 | M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | 🟨 robustness parts done: timeouts, tab renewal, submit reserve; quality and speed not yet |
 | M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | ⬜ cut-off time still unknown |
 
@@ -47,7 +47,9 @@ Status: ⬜ open · 🟨 in progress · ✅ done · ⛔ blocked
 | 16:52 | Sandbox run 2: quality 0, **never signed**: investigation used 14 min, the signing-code courier stuck on a broken tab | The form takes 2 min; time is lost before and after it → submit reserve, fresh courier tab |
 | 17:21 | Sandbox run 3: **eligible, quality 10**, signed in 13.4 min, but **empty**: the tender tab failed for 10 min | A tab can break while the site is fine → automatic tab renewal |
 | 17:30–17:50 | Validator, sanity plugins against invented values, Puneetha's Q&A fixes merged; a committed merge conflict found and repaired | Run every check after pulling, not only before |
-| ~17:50 | Sandbox run 4 (everything combined) | Running |
+| 17:31 | Vamshidhar's run of branch `codex/robustness-validation`: quality 10, 436 calls, 17.5 min (supplier and ERP agents unfinished, 0 positions priced) | Branch merged into main at 17:54 |
+| **17:49** | **Sandbox run 4 (Puneetha's Q&A fixes + tab renewal + plugins, `030ccbc`): quality 70.7, eligible**, 16.6 min, $0.43. Positions 01.02, 01.04, 01.05 perfect, 01.03 one field off, 01.01 missing | The coverage fixes work; one position and the totals are what's left |
+| 17:55 | Two sandbox runs of the new `main` started in parallel (Vamshidhar) | Parallel runs share the team's model limit and skew timing: **one test run at a time, coordinated by Maria** |
 
 **Approach so far:** build the simplest end-to-end path first (signed bid), then measure every run against the known answer, fix the stage that loses the most points, and keep every fix generic, because the final runs on websites we have never seen.
 
