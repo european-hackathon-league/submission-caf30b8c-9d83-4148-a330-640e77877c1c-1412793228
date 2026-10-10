@@ -55,6 +55,26 @@ Brief -> 4 site agents in parallel -> case file (evidence) -> calculator -> vali
 | Submitter | `submit.py` | Bid form filled from the brief's steps, TAN requested last, signed | 🟨 under test in the sandbox now |
 | Time guard | `agent.py` (`hard_stop`, `submit_reserve`) | Unfinished positions omitted and the bid still signed before 20 min | 🟨 budget exists; not tested with a forced short deadline |
 
+## Sanity checks (plugins, `starter-kit/sanity.py`)
+
+Plain-code checks against model hallucinations: no model calls, milliseconds of run time. Switch them per run with
+`SANITY_CHECKS` (unset = every implemented check, `none`, or a comma list like `validator,typing_guard`), so the
+same version can be compared with and without a check. The run log prints which checks are on.
+
+| Plugin | Hooks into | Catches | Status |
+|---|---|---|---|
+| `validator` | the bid, before it is entered | duplicate or foreign positions, a total that is not the sum of the lines, broken lines | ✅ |
+| `typing_guard` | every value the bid clerk types | values from nowhere: an invented e-mail, a made-up price, a mistyped number | ✅ |
+| `no_guessed_mailbox` | bidder details for the clerk | an unknown mailbox address filled in by guessing (the clerk asks the mailbox colleague instead) | ✅ |
+| `grounding` | every extracted fact | numbers, keys and identifiers not present in the page they were extracted from | ⬜ planned |
+| `summary_check` | before the final signature | the portal's summary disagreeing with the bid sheet | ⬜ planned |
+
+Comparison runs (fill in): same commit, `SANITY_CHECKS=default` vs `none` → quality, time, blocked actions.
+
+| Commit | Checks | Quality | Time | Blocked / repaired | Notes |
+|---|---|---|---|---|---|
+| | | | | | |
+
 ## Rules
 
 - Branch off `main`, pull before you push, small commits, and put the measured effect in the commit message.

@@ -313,11 +313,28 @@ class Tab:
         self.events: list[str] = []
         self.bad_status = 0
         self.loading: set = set()  # page, frame and data requests that have not come back yet
+        self._watch(page)
+
+    def _watch(self, page) -> None:
         page.on("dialog", lambda dialog: asyncio.ensure_future(self._on_dialog(dialog)))
         page.on("response", self._on_response)
         page.on("request", lambda request: self.loading.add(request) if request.resource_type in ("document", "xhr", "fetch") else None)
         page.on("requestfinished", lambda request: self.loading.discard(request))
         page.on("requestfailed", lambda request: self.loading.discard(request))
+
+    async def renew(self) -> str:
+        """Swap a broken tab for a fresh one in the same browser: same session and cookies, a clean page. A tab can get
+        stuck ("frame was detached", loads that never finish) while the website itself is fine: in sandbox runs the
+        investigators' tab kept timing out for minutes while a fresh tab on the same site loaded at once."""
+        old = self.page
+        page = await old.context.new_page()
+        self.page, self.frames, self.loading, self.bad_status = page, [], set(), 0
+        self._watch(page)
+        try:
+            await old.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return await self.goto(self.base_url + "/")
 
     async def _on_dialog(self, dialog):
         self.events.append(f'the browser asked "{dialog.message}" ({dialog.type}); it was accepted')

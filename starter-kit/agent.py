@@ -23,6 +23,7 @@ import llm
 import run as contract
 from browser_env import Tab
 from calculator import calculate_bid
+import sanity
 import validate
 from casefile import SHAPES, CaseFile, read_context
 from worker import ACTIONS_HELP, Agent
@@ -64,6 +65,14 @@ How to work
   references, senders and status marks before you rely on a record, and follow the brief's rules on which one
   counts. When in doubt, file both and let the facts decide.
 - Follow the search hints a website gives. If a search returns nothing or too much, change the search terms.
+- When a question asks for every item in a list, inspect its page controls and use collect on the control that
+  advances that list before filing it. Check the resulting page count or end state; do not mark a list complete after
+  seeing only its first page. If the list is inside an embedded document, use the controls belonging to that document.
+- For mailbox questions, search relevant folders separately when mailbox search covers only the current folder;
+  include the archive when looking for historical or latest records. If a query is too broad or returns nothing,
+  refine the terms and try again. Open candidate messages and file the message itself, not only its hit row.
+- If the news says extraction failed or found no usable records, do not mark that question complete. Reopen the
+  evidence page, check that it contains the records requested, and file it again with the right kind.
 - When no open question is left that your website can answer right now, finish with done, also when you need
   facts the other agents have not filed yet. You are called again as soon as the case file brings new questions.
   Never idle with wait and never browse around to pass the time.
@@ -124,6 +133,14 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         return case.file(str(action.get("kind", "")), document, source, name)
 
     async def answer(action: dict) -> str:
+        # A completion action can arrive in the same turn as `keep`. Wait for the extraction
+        # result instead of letting the model repeat a completion that cannot yet succeed.
+        while case.pending and time.time() < deadline:
+            version = case.version
+            if case.pending:
+                await case.wait_change(version, min(1.0, max(0.0, deadline - time.time())))
+        if case.pending:
+            return "Evidence extraction is still pending and the investigation deadline is near; do not repeat this answer action."
         return case.answer(str(action.get("question", "")).strip("[] "), str(action.get("status", "")), str(action.get("note", "")))
 
     # Navigation runs without the model's thinking: about twice as fast. The facts themselves are read by the
@@ -158,6 +175,7 @@ async def solve(task: dict, playwright) -> dict | None:
     listing = "\n".join(f"- {site['siteId']}: {site['url']}" for site in sites)
     context = await read_context(brief + f"\n\nThe websites of this run:\n{listing}")
     case = CaseFile(brief, context)
+    print(f"Sanity checks on: {', '.join(sanity.active()) or 'none'}", flush=True)
     print(f"Context: tender {case.reference}, scenario {case.scenario.isoformat()}, company {case.company}, "
           f"senders {case.senders}", flush=True)
 
@@ -192,7 +210,9 @@ async def solve(task: dict, playwright) -> dict | None:
         facts = case.inputs()
         bid = calculate_bid(case.reference, case.scenario, facts.governing, facts.positions, facts.clarifications,
                             facts.requirements, facts.materials, facts.authorities, facts.no_material)
-        bid, issues = validate.check(bid, {p.position for p in facts.positions} or None)
+        issues = []
+        if sanity.enabled("validator"):
+            bid, issues = validate.check(bid, {p.position for p in facts.positions} or None)
         if issues:
             print("VALIDATOR: " + " | ".join(issues), flush=True)
         print(f"Investigation took {time.time() - started:.0f} s. {llm.summary()}", flush=True)

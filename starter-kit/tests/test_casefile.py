@@ -50,6 +50,17 @@ class EvidenceProvenance(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(facts.evidence, [])
         self.assertIn("schema validation rejected", facts.take_news("tender")[0])
 
+    async def test_only_malformed_rows_are_treated_as_no_usable_evidence(self):
+        facts = casefile.CaseFile("brief", {"tender_reference": "TEST-0001", "scenario_date": "2030-01-01"})
+
+        async def malformed_rows(*args, **kwargs):
+            return {"positions": [{"quantity": 9}]}
+
+        with patch.object(llm, "chat_json", malformed_rows):
+            await facts._extract("positions", "Position records", "https://portal.example/rfq", "tender", "empty")
+        self.assertEqual(facts.evidence, [])
+        self.assertIn("no usable records", facts.take_news("tender")[0])
+
 
 if __name__ == "__main__":
     unittest.main()
