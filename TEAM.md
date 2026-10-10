@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 20:35.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 20:58.
 
 ## Owners
 
@@ -32,7 +32,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| **18:3x** | **sub_4c6ef121 (SUBMISSION)** | Maria | **2d330db** (identical to the 100 package) | review pending | | | | **First submission.** Plan: submit exactly the version that measured 100 |
+| 18:55 | run_e3804980 | Maria | **main 33c04d7** (clean checkout) | running | | | | Test of main as it is on GitHub; the main runner records the result |
+| 18:38 | **sub_4c6ef121 (SUBMISSION)** → run_2cdb6477 | Maria | **2d330db** (identical to the 100 package) | running (review **passed** ✅) | | | | First submission. The AI fair-play review accepted the model-directed design |
 | **18:18** | **run_2a95ffc9** | Vamshidhar | **2d330db** (main; verified file by file) | **100** 🎉 | ✅ | **12.4 min** | 302 / $0.36 | All 5 positions perfect, signed |
 | 17:57 | run_73e5cf95 | Vamshidhar | pkg 2ede98ed | 0 (failed) | ❌ | 19.6 min | 254 / $0.31 | No answer submitted |
 | 17:52 | run_7b2c0cf9 | Vamshidhar | pkg 363ab793 | – (cancelled) | ❌ | 7.6 min | 126 / $0.16 | Cancelled by Vamshidhar |
@@ -54,6 +55,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 Leaderboard for comparison (17:37 UTC): **isar-labs 100 in 7:19 min / $0.10**, AdminRights 100 in 17:57 / $0.24, Here for the Memes 53.8. Earlier leader: 21.5 (13:00, 14:34). **We have no submission yet.**
 
 **Spread so far (model-directed agent):** **100** · 98.7 · 70.7 · 70.7 · 29.1 · 27.8 · 22.8 · 10 · 10 · 0 · 0 · 0 (failed/unsigned). Best and median are far apart.
+
+**From now on:** `tuning/main_runner.sh` runs the current GitHub main in a clean checkout, one run at a time, and records each official result (docs/runs/main_runs.tsv), so reliability is measured per version, not just the best run.
 
 **Local scorer:** calibrated on these official breakdowns, deviation 0.00 on all 8 scored runs (`tuning/calibrate.py`). Best and median are far apart: reliability is the main lever.
 
