@@ -287,7 +287,9 @@ class CaseFile:
                       f"{self.scenario.isoformat()}.\n\nKIND OF RECORD: {kind}\nSHAPE\n{SHAPES[kind]}\n\n"
                       f"EVIDENCE (from {source})\n{text[:60000]}")
             raw = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
-                                      think=True, max_tokens=8000, label=f"extract:{kind}",
+                                      # This is schema-constrained transcription, not a navigation decision. The
+                                      # sandbox model's thinking mode repeatedly consumed its 150 s timeout here.
+                                      think=False, max_tokens=8000, label=f"extract:{kind}",
                                       provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
             data, validation = validate_extraction(kind, raw)
             summary = self.merge(kind, data) if data else (validation or "the extraction failed; file the document again")
