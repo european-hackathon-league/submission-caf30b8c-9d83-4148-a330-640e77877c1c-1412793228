@@ -80,6 +80,8 @@ tells agents to finish when their own questions are done).
 
 ## Score log (every sandbox run, newest first)
 
+> ⚠️ **20:40-21:10 UTC: every run failed on infrastructure, whatever the code** (5 runs: Vamshidhar's 4 and Maria's 64397a5e, including the package that scored 100 at 20:24). Results from that window say nothing about the code.
+
 > ⚠️ **Sandbox tender-portal outage (from ~20:00 UTC):** in c3c4b1e8, sub_e69b12d4 (bid entry) and sub_97fb152d the tender portal never loaded inside the sandbox (45 s timeouts, ERR_ABORTED), while the portals answered normally from outside and other runs at the same time reached them. Those 0s say nothing about the code. Worth reporting to the Atira organisers.
 
 
@@ -90,11 +92,11 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
 | 20:53 | **sub_ce82715c (SUBMISSION, Vamshidhar)** → run_6baaba90 | Vamshidhar | **v1** (package 47e1f6ce, same as 44a626ef) | **100** 🎉 | ✅ | 11.0 min | 237 / $0.28 | Review **passed** ✅: the latest passed submission, i.e. **our final package**. **v1 reproduced: 2 of 2 clean runs at 100** (9.6 and 11.0 min) |
-| 20:52 | run_143ae323 | Vamshidhar | ? | running | | | | |
+| 20:52 | run_143ae323 | Vamshidhar | package b760b15c (**same as his 100 submission 8618fad2**) | **10** | ✅ | 13.2 min | 117 / $0.12 | **Model overload**: 10 calls without reply, 3 pages not loading. Same package scored 100 at 20:24 |
 | 20:50 | run_64397a5e | Maria | branch `maria/erp-loop-fixes` 9ba31c0 (same starter-kit as 5ee465a) | **0 (no answer)** | ❌ | 21.1 min | 51 / – | **Infrastructure, not code: the tender portal never loaded**, not even the first page (45 s timeout, reload ERR_ABORTED "frame was detached"), then 10 model calls without reply. The rest worked: customer portal filed revision + requirements in 60 s, mail filed discount + reserves; ERP correctly idle (material questions need the positions). Same tender-portal pattern as c3c4b1e8, 41a5de64 (v1!) and c4f64b7b; Vamshidhar's 6baaba90 at the same time was fine. Not a reproducibility result |
-| 20:50 | run_c593918d | Vamshidhar | ? | running | | | | |
-| 20:50 | run_cf7ab2ec | Vamshidhar | ? | running | | | | |
-| 20:41 | run_5f6f9d65 | Vamshidhar | ? | running | | | | |
+| 20:50 | run_c593918d | Vamshidhar | package bf40b0a3 | **0 (no answer)** | ❌ | 19.0 min | 48 / $0.04 | **Site outage**: 9 page loads timed out, 6 model calls without reply |
+| 20:50 | run_cf7ab2ec | Vamshidhar | "5s navigation timeout refresh-reopen recovery" (d6998b83) | **0 (no answer)** | ❌ | 19.2 min | 125 / $0.14 | **Model overload**: 16 calls without reply |
+| 20:41 | run_5f6f9d65 | Vamshidhar | package 05cf9d59 | **10** | ✅ | 13.7 min | 133 / $0.13 | **Model overload**: 13 calls without reply |
 | 20:26 | **run_2b8b5ca8** | Maria | branch `maria/erp-loop-fixes` **5ee465a**: all fixes + v1's routing + goto hint, main's calculator | **100** 🎉 | ✅ | **10.3 min** | 244 / $0.31 | All 5 positions 13/13, signed. Investigation **402 s**, ended by itself with **no open questions**; longest repeat 7× (customer portal, then done); one agent sent idle when stuck; 0 model timeouts. **Fast like v1, with main's calculator guard: candidate for main** |
 | ~20:30 (organisers) | **sub_2f274fd2 (SUBMISSION, promoted)** | Organisers | v1 test run 44a626ef | **100** 🎉 | ✅ | **9.6 min** | 249 / $0.30 | **Promoted by the organisers from test run 44a626ef** (after the sandbox outage). **Leaderboard: rank #3, 100, $0.30, 9:34** |
 | 20:24 | **sub_8618fad2 (SUBMISSION, Vamshidhar)** → run_28a384ba | Vamshidhar | package b760b15c (no label) | **100** 🎉 | ✅ | **10.8 min** | 228 / $0.29 | Review **passed** ✅: the latest passed submission, i.e. **our final package now**. Vamshidhar: which code is it? |
