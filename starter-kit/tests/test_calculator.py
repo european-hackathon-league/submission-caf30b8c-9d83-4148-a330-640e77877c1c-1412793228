@@ -1143,5 +1143,217 @@ class AllocatingCents(unittest.TestCase):
         self.assertEqual(allocate_cents(0, {"a": D(1), "b": D(2)}), {"a": D(0), "b": D(0)})
 
 
+class ComplexMultiPositionIntegration(Case):
+    """End-to-end multi-position integration tests combining shared materials, sets, Q&A amendments,
+    withdrawn clarifications, price_unit=100 foreign scales, setup pools, marginal bonuses, and commitments."""
+
+    def test_five_position_tender_with_shared_material_sets_qa_amendments_and_all_commercial_rules(self):
+        positions = [
+            pos("01.01", 10, "REQ-1"),
+            pos("01.02", 15, "REQ-2"),
+            pos("01.03", 20, "REQ-2"),  # shares REQ-2 / MAT-B with 01.02
+            pos("01.04", 8, "REQ-3"),
+            pos("01.05", 3, "REQ-4", is_set=True),  # 3 sets x 4 pieces/set = 12 pieces
+        ]
+        requirements = {
+            "REQ-1": need("REQ-1", bore_mm=40, stroke_mm=160, usable_travel=True, reserve_key="RES-MAIN",
+                          pressure_bar=160, mounting="flange", certification="CERT-X", catalogue_group="CAT-1"),
+            # REQ-2 has initial usable travel 291 mm in REV-2, amended by Q-1 to 280 mm; + 2*10 = 300 mm
+            "REQ-2": need("REQ-2", bore_mm=60, stroke_mm=291, usable_travel=True, reserve_key="RES-MAIN",
+                          pressure_bar=200, mounting="clevis", certification=None, catalogue_group="CAT-2"),
+            "REQ-3": need("REQ-3", bore_mm=80, stroke_mm=400, usable_travel=False,
+                          pressure_bar=250, mounting="trunnion", certification="CERT-Y", catalogue_group="CAT-3"),
+            "REQ-4": need("REQ-4", bore_mm=100, stroke_mm=500, usable_travel=False,
+                          pressure_bar=250, mounting="foot", certification=None, catalogue_group="CAT-4",
+                          pieces_per_set=4),
+        }
+        clarifications = [
+            # Q-1 amends REQ-2 usable travel to 280 and changes 01.02 quantity to 25
+            qa("Q-1", june(2), quantity_changes=[("01.02", 25, False)],
+               amendments=[(REVISION, "REQ-2", "stroke", "280")]),
+            # Q-2 changes 01.02 quantity to 99, but Q-3 withdraws Q-2
+            qa("Q-2", june(4), quantity_changes=[("01.02", 99, False)]),
+            qa("Q-3", june(6), withdraws=["Q-2"]),
+            # Q-4 assigns commercial keys and ordinary setup fees
+            assigned(
+                {
+                    "01.01": {"condition_group": "CG-BOTH", "packaging_tariff": "PKG-1",
+                              "setup_pool": "POOL-1", "project_bonus": "BON-1"},
+                    "01.02": {"condition_group": "CG-BASE", "packaging_tariff": "PKG-1",
+                              "delivery_commitment": "DC-B-FAST", "setup_pool": "POOL-1", "project_bonus": "BON-1"},
+                    "01.03": {"condition_group": "CG-NONE", "packaging_tariff": "PKG-1",
+                              "delivery_commitment": "DC-B-TIGHT"},
+                    "01.04": {"packaging_tariff": "PKG-1"},
+                    "01.05": {"condition_group": "CG-BOTH", "packaging_tariff": "PKG-1",
+                              "project_bonus": "BON-1"},
+                },
+                fees={"01.01": "20.00"},
+            ),
+        ]
+        materials = [
+            material("MAT-A", bore_mm=40, stroke_mm=180, pressure_bar=160, mounting="flange",
+                     certification="CERT-X", catalogue_group="CAT-1", carton_size=4,
+                     allocation_mass_g=D(200), surcharge_mass_g=D(50), index_code="IDX-1", stock=20,
+                     conditions=[condition((1, "10000.00"), price_unit=100)]),  # 100.00 EUR/pc
+            material("MAT-B", bore_mm=60, stroke_mm=300, pressure_bar=200, mounting="clevis",
+                     certification=None, catalogue_group="CAT-2", carton_size=10,
+                     allocation_mass_g=D(120), surcharge_mass_g=D(40), index_code="IDX-1", stock=40,
+                     conditions=[condition((1, "6000.00"), (20, "5000.00"), price_unit=100)]),  # 50.00 EUR/pc at >=20
+            material("MAT-C", bore_mm=80, stroke_mm=400, pressure_bar=250, mounting="trunnion",
+                     certification="CERT-Y", catalogue_group="CAT-3", carton_size=5,
+                     allocation_mass_g=D(300), surcharge_mass_g=D(0), index_code=None, stock=10,
+                     conditions=[condition((1, "200.00"), currency="CHF", fx_key="FX-CHF", price_unit=1)]),
+            material("MAT-D", bore_mm=100, stroke_mm=500, pressure_bar=250, mounting="foot",
+                     certification=None, catalogue_group="CAT-4", carton_size=6,
+                     allocation_mass_g=D(400), surcharge_mass_g=D(100), index_code="IDX-1", stock=15,
+                     conditions=[condition((1, "85.00"), (10, "75.00"), price_unit=1)]),
+        ]
+        authorities = Authorities(
+            reserves={"RES-MAIN": (REVISION, 10)},
+            discount_percent=D(10),
+            discount_min_order=D("4000.00"),
+            clauses={"CG-BOTH": "base_and_surcharge", "CG-BASE": "base_only", "CG-NONE": "none"},
+            index_rates={"IDX-1": D("0.10")},
+            tariffs={"PKG-1": D("4.00")},
+            # Pooled demand for MAT-B is 25 (from 01.02) + 20 (from 01.03) = 45 pieces > stock 40:
+            # DC-B-FAST has ceiling 50 (>=45 -> 2 weeks); DC-B-TIGHT has ceiling 30 (<45 -> falls back to 6 weeks)
+            commitments={"DC-B-FAST": Commitment("MAT-B", 2, 50), "DC-B-TIGHT": Commitment("MAT-B", 3, 30)},
+            fx={"FX-CHF": D("0.95")},
+            pools={"POOL-1": (D("100.00"), "largest_remainder")},
+            bonus={"BON-1": [BonusBand(D(0), D(1000), D(1)), BonusBand(D(1000), None, D(2))]},
+        )
+        result = bid(positions, materials, clarifications, requirements, authorities)
+        self.assertEqual(result.decision, "bid")
+        self.assertEqual(result.omitted, [])
+        self.assertEqual(result.discount_percent, D(10))
+
+        # Check quantities & lead times:
+        # 01.01: 10 pcs <= stock 20 -> 1 wk
+        # 01.02: 25 pcs (Q-2 withdrawn by Q-3, so Q-1's 25 stands), MAT-B pooled 45 <= DC-B-FAST ceiling 50 -> 2 wk
+        # 01.03: 20 pcs, MAT-B pooled 45 > DC-B-TIGHT ceiling 30 and > stock 40 -> 6 wk
+        # 01.04: 8 pcs <= stock 10 -> 1 wk
+        # 01.05: 3 sets x 4 = 12 pcs <= stock 15 -> 1 wk
+        by_pos = {line.position: line for line in result.lines}
+        self.assertEqual([ (p, by_pos[p].material_number, by_pos[p].quantity, by_pos[p].lead_time_weeks)
+                           for p in ("01.01", "01.02", "01.03", "01.04", "01.05") ],
+                         [("01.01", "MAT-A", 10, 1),
+                          ("01.02", "MAT-B", 25, 2),
+                          ("01.03", "MAT-B", 20, 6),
+                          ("01.04", "MAT-C", 8, 1),
+                          ("01.05", "MAT-D", 12, 1)])
+        TheAnswer().assertSchema(result.answer())
+
+    def test_missing_qa_stroke_amendment_on_usable_travel_leaves_position_omitted(self):
+        """Models the failure when Q&A extraction misses a usable-travel amendment:
+        unamended 291 + 2*10 = 311 mm fails to match MAT-B (300 mm), omitting that position
+        while still pricing positions whose requirements matched."""
+        positions = [pos("01.01", 10, "REQ-1"), pos("01.02", 15, "REQ-2")]
+        requirements = {
+            "REQ-1": need("REQ-1", bore_mm=40, stroke_mm=180, usable_travel=False),
+            "REQ-2": need("REQ-2", bore_mm=60, stroke_mm=291, usable_travel=True, reserve_key="RES-MAIN"),
+        }
+        materials = [
+            material("MAT-A", bore_mm=40, stroke_mm=180),
+            material("MAT-B", bore_mm=60, stroke_mm=300),
+        ]
+        authorities = Authorities(reserves={"RES-MAIN": (REVISION, 10)})
+        # Without the Q&A amendment (291 -> 280), REQ-2 resolves to 311 mm != 300 mm
+        partial = bid(positions, materials, (), requirements, authorities)
+        self.assertEqual([line.position for line in partial.lines], ["01.01"])
+        self.assertEqual(partial.omitted, ["01.02"])
+
+        # With the Q&A amendment (291 -> 280), REQ-2 resolves to 280 + 2*10 = 300 mm == MAT-B
+        complete = bid(positions, materials, [qa("Q-1", june(2), amendments=[(REVISION, "REQ-2", "stroke", "280")])],
+                       requirements, authorities)
+        self.assertEqual([line.position for line in complete.lines], ["01.01", "01.02"])
+        self.assertEqual(complete.omitted, [])
+
+
+class RandomizedPropertyTests(Case):
+    """Seeded randomized stress tests verifying arithmetic & schema invariants across varied tenders."""
+
+    def test_seeded_random_tenders_satisfy_all_accounting_and_schema_invariants(self):
+        import random
+
+        rng = random.Random(20261010)
+        schema_checker = TheAnswer()
+        clauses_cycle = ("base_only", "base_and_surcharge", "none")
+        pool_methods = ("largest_remainder", "remainder_to_first", "remainder_to_last", "remainder_to_largest")
+
+        for trial in range(40):
+            with self.subTest(trial=trial):
+                num_positions = rng.randint(1, 6)
+                positions = []
+                requirements = {}
+                materials = []
+                assignment_map = {}
+                fee_map = {}
+
+                for idx in range(1, num_positions + 1):
+                    p_id = f"01.0{idx}"
+                    ref = f"REQ-{idx}"
+                    is_set = rng.choice((False, False, True))
+                    pcs_per_set = rng.randint(2, 8) if is_set else None
+                    qty = rng.randint(1, 30)
+                    bore = 20 * idx
+                    stroke = 100 + 25 * idx
+                    positions.append(pos(p_id, qty, ref, is_set=is_set))
+                    requirements[ref] = need(ref, bore_mm=bore, stroke_mm=stroke, pieces_per_set=pcs_per_set)
+
+                    price_unit = rng.choice((1, 10, 100))
+                    raw_scale_1 = Decimal(rng.randint(500, 25000)) / Decimal(100) * price_unit
+                    raw_scale_20 = (raw_scale_1 * Decimal("0.90")).quantize(Decimal("0.01"))
+                    currency = rng.choice(("EUR", "USD"))
+                    fx_key = "FX-1" if currency == "USD" else None
+                    materials.append(material(
+                        f"MAT-{idx}",
+                        bore_mm=bore,
+                        stroke_mm=stroke,
+                        carton_size=rng.randint(1, 12),
+                        allocation_mass_g=Decimal(rng.randint(50, 1500)),
+                        surcharge_mass_g=Decimal(rng.randint(0, 500)),
+                        index_code="IDX-1",
+                        stock=rng.randint(5, 100),
+                        conditions=[condition((1, str(raw_scale_1)), (20, str(raw_scale_20)),
+                                              currency=currency, fx_key=fx_key, price_unit=price_unit)],
+                    ))
+                    assignment_map[p_id] = {
+                        "condition_group": f"CG-{idx % 3}",
+                        "packaging_tariff": "TAR-1",
+                        "setup_pool": "POOL-1",
+                        "project_bonus": "BON-1",
+                    }
+                    if rng.choice((True, False)):
+                        fee_map[p_id] = f"{rng.randint(5, 80)}.00"
+
+                pool_fee = Decimal(f"{rng.randint(20, 250)}.00")
+                pool_method = rng.choice(pool_methods)
+                authorities = Authorities(
+                    discount_percent=Decimal(rng.choice((0, 5, 10, 15))) / Decimal(2),
+                    discount_min_order=Decimal(rng.choice((0, 100, 5000))),
+                    clauses={f"CG-{i}": clauses_cycle[i] for i in range(3)},
+                    index_rates={"IDX-1": Decimal(rng.randint(1, 50)) / Decimal(1000)},
+                    tariffs={"TAR-1": Decimal(rng.randint(100, 1500)) / Decimal(100)},
+                    fx={"FX-1": Decimal(rng.randint(75, 125)) / Decimal(100)},
+                    pools={"POOL-1": (pool_fee, pool_method)},
+                    bonus={"BON-1": [BonusBand(D(0), D(1000), D(1)), BonusBand(D(1000), None, D(2))]},
+                )
+                result = bid(positions, materials, [assigned(assignment_map, fee_map)], requirements, authorities)
+                answer = result.answer()
+                schema_checker.assertSchema(answer)
+                self.assertEqual(result.decision, "bid")
+                self.assertEqual(len(result.lines), num_positions)
+                # Total net must equal exact sum of quantity * rounded unit_price
+                expected_total = sum((line.quantity * line.unit_price for line in result.lines), Decimal("0.00"))
+                self.assertEqual(result.total_net, expected_total)
+                for line in result.lines:
+                    self.assertEqual(line.unit_price, round_cents(line.unit_price))
+                    self.assertEqual(line.base_unit_price, round_cents(line.base_unit_price))
+                    self.assertEqual(line.surcharge_per_unit, round_cents(line.surcharge_per_unit))
+                    self.assertEqual(line.packaging_per_unit, round_cents(line.packaging_per_unit))
+                    self.assertEqual(line.rebate_total, round_cents(line.rebate_total))
+
+
 if __name__ == "__main__":
     unittest.main()
+
