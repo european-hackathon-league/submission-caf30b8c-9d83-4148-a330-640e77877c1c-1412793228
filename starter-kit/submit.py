@@ -1,0 +1,183 @@
+"""The last stage: an agent enters the calculated bid in the tender portal, signs it and reads the receipt.
+
+The calculator has fixed every number. `submit_bid` hands them to a model as a bid sheet and lets it drive whatever
+bid form the portal has: where the form is, what each step wants, which notation a field takes, how a position is
+left out and when the signing code has to be requested are all read from the pages. A second agent, on the webmail,
+fetches that code when the first one asks for it. Nothing here knows a field name or the order of the steps.
+"""
+from __future__ import annotations
+
+import json
+import time
+from decimal import Decimal
+
+from browser_env import Tab
+from calculator import Bid
+from worker import ACTIONS_HELP, Agent
+
+WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
+MAIL_BUDGET = 120  # seconds one request to the mailbox may take
+CLERK_STEPS, COURIER_STEPS = 120, 25
+# Entering a bid is reading a form and copying values: without the model's long reasoning a turn takes about half
+# the time, and the reply's "thought" still leaves it room to check a conversion.
+CLERK_THINKS, COURIER_THINKS = False, False
+
+CLERK = """You are the bid clerk of a manufacturer's sales engineering team. Your colleagues have researched a
+public tender and a calculator has priced it: the BID SHEET below is the final result. You work the tender portal
+"{site}" at {url} in your own browser tab, and your whole job is to get exactly this bid into the portal's bid
+form, sign it, submit it and read the confirmation. You do not research and you do not recalculate.
+
+TASK BRIEF (background on what a valid submission is; the values to enter come from the bid sheet)
+{brief}
+END OF BRIEF
+
+BIDDER
+{bidder}
+
+BID SHEET
+{sheet}
+
+Reading the bid sheet
+- "decision" is "bid" or "no_bid". A no_bid has no positions and a total of zero: take the form's way of
+  declining, and still sign and submit it.
+- "positions" has one entry per tender position that is offered. Enter each under its own position number.
+- "material" describes the offered product, for forms that make you pick or configure it: choose what equals
+  these values.
+- Amounts are net EUR, written here with a decimal point and without thousands separators. A field may expect
+  another notation (a decimal comma, a unit, whole numbers for weeks and pieces): follow its hints, placeholder
+  and error messages. Change the notation only, never the value.
+- null means the value is not known: leave that field empty. 0 or 0.00 is a known zero: enter it.
+- "omitted_positions" could not be priced. Never invent values for them: use the form's explicit way of leaving
+  a position out, if it has one.
+
+{actions}
+One more action:
+  {{"do": "ask_mail", "task": "<what you need and how to recognise it>"}}
+      A colleague who has the bidder's mailbox open in another browser looks for it and answers. This is how you
+      get the signing code (TAN) the portal sends by mail. Ask only after you have triggered the code in the
+      portal, and pass on what you know about it (the tender reference, that you requested it just now, anything
+      the portal displayed about it): the mailbox also holds older codes that no longer work.
+
+How to work
+- Start from the page you are on and find the bid form of tender {reference}. Log in again if the portal asks.
+- A bid form asks, in an order of its own, for things like the bidder's details, bid or no bid, the positions,
+  the commercial terms, declarations, a review and a signature. Read each page and give it what it asks for,
+  from the bidder data and the bid sheet. Fill every field the sheet has a value for, optional ones included.
+- Read the form's own instructions: when entries are saved, what going back does, which fields are required.
+  Do the fields of a page in one reply, then the control that saves them or moves on.
+- After each step look at the result. If the form reports an error or did not keep a value, correct that field
+  before you move on.
+- Declarations: read what each one says. Give the confirmations a valid bid needs; leave unticked, or untick,
+  options that would alter the bid or have nothing to do with it.
+- On the review page compare what the form lists with the bid sheet: reference, decision, every position, the
+  discount and the total. Go back and correct differences while there is time.
+- Signing: trigger the code in the portal, get it with ask_mail, enter it and submit. A submission is final.
+  If the portal rejects a code, request a fresh one instead of trying the same again.
+- You are finished only when the portal confirms that the bid was received. Then finish with done and put the
+  confirmation (its receipt number or code, else its wording) in "answer". If you cannot submit, finish with
+  done without "answer" and say why in "summary".
+- Watch the time. A bid that is entered but not submitted scores nothing; a submitted bid with positions left
+  out keeps the points of the positions it holds. When the head of a turn says time is short, do as it says.
+"""
+
+COURIER = """You have the sales mailbox of a bidding company open in the webmail "{site}" at {url}, in your own
+browser tab. A colleague is entering the company's bid for tender {reference} in the tender portal right now and
+asks you for something from the mailbox, usually the one-time signing code (TAN) the portal has just mailed.
+
+{actions}
+
+How to work
+- The request heads every turn, together with the answers you gave earlier in this run.
+- Codes expire. The mailbox can hold older codes, codes for other tenders whose references look alike, and
+  unrelated mail with similar subjects. The one that counts is the newest message that matches the request. Open
+  the message itself and check its reference and time before you answer: a row in a list is not enough.
+- Lists can be paged, sorted either way and split over folders, and new mail may only show after a reload. If the
+  message is not there yet, reload and look again a few times.
+- Log in again if the webmail asks.
+- Finish with done and put ONLY the value asked for in "answer": a code exactly as written, nothing around it.
+  If you cannot find it, finish with done without "answer" and say in "summary" what you saw instead.
+"""
+
+
+def _amount(value: Decimal | None) -> str | None:
+    return None if value is None else f"{value:.2f}"
+
+
+def bid_sheet(bid: Bid) -> dict:
+    """The bid as the clerk gets it: the answer's fields with exact amounts as text, the positions left out, and per
+    position the offered material's attributes for forms that have the bidder configure the product."""
+    positions = []
+    for line in bid.lines:
+        material = line.material
+        positions.append({
+            "position": line.position, "material_number": line.material_number,
+            "material": None if material is None else {
+                "bore_mm": material.bore_mm, "stroke_mm": material.stroke_mm, "pressure_bar": material.pressure_bar,
+                "mounting": material.mounting, "certification": material.certification},
+            "quantity": line.quantity, "unit_price": _amount(line.unit_price),
+            "lead_time_weeks": line.lead_time_weeks, "base_unit_price": _amount(line.base_unit_price),
+            "surcharge_per_unit": _amount(line.surcharge_per_unit),
+            "packaging_per_unit": _amount(line.packaging_per_unit), "rebate_total": _amount(line.rebate_total)})
+    discount = Decimal(bid.discount_percent)
+    return {"tender_reference": bid.tender_reference, "decision": bid.decision, "currency": "EUR",
+            "discount_percent": int(discount) if discount == discount.to_integral_value() else float(discount),
+            "positions": positions, "omitted_positions": list(bid.omitted), "total_net": _amount(bid.total_net)}
+
+
+async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: dict, brief: str,
+                     deadline: float) -> dict:
+    """Have an agent enter, sign and submit `bid` in the tender portal before `deadline` (a time.time() value).
+
+    `context` holds tender_reference, scenario_date, company, vat_id and email. Returns {"submitted", "receipt",
+    "notes"}: `receipt` is the portal's confirmation as the agent read it, empty when there was none.
+    """
+    reference = str(context.get("tender_reference") or bid.tender_reference)
+    codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
+
+    async def ask_mail(action: dict) -> str:
+        task = str(action.get("task") or "").strip()
+        if not task:
+            return 'ask_mail needs a "task": say what you need from the mailbox and how to recognise it'
+        if mail_tab is None:
+            return "there is no mailbox in this run, so nothing can be fetched by mail"
+
+        def request() -> str:
+            text = f"REQUEST FROM YOUR COLLEAGUE AT THE TENDER PORTAL\n{task}"
+            if codes:
+                text += ("\n\nANSWERS YOU GAVE EARLIER IN THIS RUN (they are used up: a new request needs a newer "
+                         "message)\n" + "\n".join(f"- {code}" for code in codes))
+            return text
+
+        system = COURIER.format(site=mail_tab.site_id, url=mail_tab.base_url, reference=reference,
+                                actions=ACTIONS_HELP)
+        courier = Agent("courier", mail_tab, system, request, deadline=min(deadline, time.time() + MAIL_BUDGET),
+                        max_steps=COURIER_STEPS, think=COURIER_THINKS)
+        outcome = await courier.run()
+        answer = str(outcome.get("answer") or "").strip()
+        if not answer:
+            return "the mailbox colleague found nothing: " + (outcome.get("summary") or "no result in the time given")
+        codes.append(answer)
+        return f'the mailbox colleague answers: "{answer}"' + (f' ({outcome["summary"]})' if outcome.get("summary") else "")
+
+    def heading() -> str:
+        left = int(deadline - time.time())
+        text = f"YOUR JOB: enter, sign and submit the bid for tender {reference}, then read the confirmation."
+        if codes:
+            text += "\nCodes from the mailbox so far, oldest first: " + ", ".join(codes)
+        if left < WRAP_UP:
+            text += (f"\nTIME IS SHORT ({left} s). Enter no further positions: leave out the ones not entered yet if "
+                     "the form allows it, go straight to the signature, fetch the code and submit what is entered.")
+        return text
+
+    bidder = {"company": context.get("company"), "vat_id": context.get("vat_id"), "email": context.get("email")}
+    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
+                          bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
+                          sheet=json.dumps(bid_sheet(bid), ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
+    clerk = Agent("submit", tender_tab, system, heading, extra={"ask_mail": ask_mail}, deadline=deadline,
+                  max_steps=CLERK_STEPS, think=CLERK_THINKS)
+    outcome = await clerk.run()
+    receipt = str(outcome.get("answer") or "").strip()
+    notes = str(outcome.get("summary") or "")
+    if not outcome.get("done"):
+        notes = (notes + " " if notes else "") + f"stopped after {outcome.get('steps', 0)} steps without a confirmation"
+    return {"submitted": bool(outcome.get("done") and receipt), "receipt": receipt, "notes": notes}
