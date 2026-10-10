@@ -87,6 +87,21 @@ class PartialCredit(unittest.TestCase):
         self.assertEqual(s.parts["check:metal_index"], 5)
 
 
+class CalibratedOnOfficialBreakdowns(unittest.TestCase):
+    """Rules confirmed against Atira's breakdowns of 8 sandbox runs (10 Oct)."""
+
+    def test_a_self_consistent_total_over_an_incomplete_bid_earns_no_consistency_points(self):
+        a = answer_from(GOLDEN)
+        a["positions"] = a["positions"][:1]
+        a["total_net"] = 123.40  # equals the one line it has
+        self.assertEqual(score(a, GOLDEN).parts["arithmetic"], 0)
+
+    def test_the_metal_index_check_needs_every_position_surcharge(self):
+        a = answer_from(GOLDEN)
+        a["positions"][1]["surcharge_per_unit"] = 9.99  # not the position named in _checks
+        self.assertEqual(score(a, GOLDEN).parts["check:metal_index"], 0)
+
+
 class NoBid(unittest.TestCase):
     GOLDEN_NO_BID = {"tender_reference": "XX-0000-0002", "decision": "no_bid", "currency": "EUR",
                      "discount_percent": 0, "positions": [], "total_net": 0}

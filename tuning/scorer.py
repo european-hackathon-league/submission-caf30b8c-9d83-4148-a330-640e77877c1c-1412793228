@@ -92,10 +92,15 @@ def normalise(text) -> str:
     return "".join(ch for ch in str(text) if ord(ch) not in ZERO_WIDTH).strip()
 
 
-def arithmetic_ok(answer: dict) -> bool:
-    """ASSUMPTION: 'every position, and a total that is their sum' = total_net equals the half-up rounded
-    sum of quantity x unit_price over all positions, and every position has both numbers."""
+def arithmetic_ok(answer: dict, golden: dict | None = None) -> bool:
+    """Calibrated on 8 official breakdowns (10 Oct): total_net must equal the half-up rounded sum of quantity x
+    unit_price over the answer's positions AND every tender position must be answered; a self-consistent total
+    over an incomplete bid scores 0 ("total_consistency")."""
     positions = answer.get("positions") or []
+    if golden is not None:
+        answered = {normalise(p.get("position", "")) for p in positions}
+        if any(normalise(g["position"]) not in answered for g in golden.get("positions") or []):
+            return False
     try:
         line_sum = sum(
             (Decimal(int(p["quantity"])) * money(p["unit_price"]) for p in positions), Decimal(0)
@@ -118,7 +123,7 @@ def score(answer: dict, golden: dict) -> Score:
     discount_ok = _num_equal(answer.get("discount_percent"), golden.get("discount_percent"))
     s.add("discount", DISCOUNT if discount_ok else 0)
     s.add("total", TOTAL if money(answer.get("total_net")) == money(golden.get("total_net")) else 0)
-    s.add("arithmetic", ARITHMETIC if arithmetic_ok(answer) else 0)
+    s.add("arithmetic", ARITHMETIC if arithmetic_ok(answer, golden) else 0)
 
     by_position = _index_positions(answer.get("positions") or [], s)
     checks = golden.get("_checks") or {}
@@ -174,8 +179,12 @@ def _index_positions(positions: list[dict], s: Score) -> dict[str, dict]:
 
 
 def _check_ok(name: str, spec: dict, by_position: dict[str, dict], golden_by_position: dict[str, dict]) -> bool:
-    """ASSUMPTION: the withdrawn-Q&A check compares that position's quantity; the metal-index check compares
-    the field named in the golden spec (default surcharge_per_unit) with the golden position's value."""
+    """Calibrated on official breakdowns: the withdrawn-Q&A check compares that position's quantity; the
+    metal-index check ("index_window") compares surcharge_per_unit of EVERY tender position with the reference."""
+    if name == "metal_index":
+        field_name = spec.get("field", "surcharge_per_unit")
+        return all(same(field_name, (by_position.get(key) or {}).get(field_name), gp.get(field_name))
+                   for key, gp in golden_by_position.items())
     key = normalise(spec["position"])
     p = by_position.get(key)
     if p is None:
