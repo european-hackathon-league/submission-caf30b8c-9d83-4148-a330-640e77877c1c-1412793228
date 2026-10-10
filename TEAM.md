@@ -26,6 +26,7 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 6 | Calculator latent bugs, edge-case tests, leakage lint, fair-play checklist | Private-dataset safety, review safety | Vamshidhar |
 | 7 | Pitch, cut-off time | | Iga, Ravindra |
 | 8 | **ERP filing is the score driver**: ERP pages filed vs score on the same investigation code: 28 → 100 (2a95ffc9), 6 → 38.2 (2cdb6477), 2 → 10 (e3804980). Local tests start from a complete golden case file, so they never see this | Investigators must file every candidate (matching is code), and slow loops must be caught | 🟨 Maria, branch `maria/erp-loop-fixes` (8fda362): circle detection over 16 turns + investigator hint + "file every candidate" rule; 295 tests OK, golden exact; needs a sandbox run |
+| 10 | **Speed: stuck investigators** (100 run 74b22ceb took 19.3 of 20 min) | The tender-portal agent opened the same unchanged page 122× (~8 min); the investigation waits for every agent, so it ran to its time limit. Without the loop it would have ended around min 4-5 | 🟨 Maria, branch `maria/erp-loop-fixes` 76db483: a stuck investigator is sent idle (6 identical rounds, or circling after 2 hints) and woken by news; 296 tests OK; needs a sandbox run |
 | 9 | Work on branches, not main | Pushing to main got in the way of the other builders | Everyone; merge to main only when agreed |
 
 ## Score log (every sandbox run, newest first)
