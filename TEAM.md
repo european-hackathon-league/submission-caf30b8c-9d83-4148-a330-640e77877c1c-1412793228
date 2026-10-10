@@ -89,6 +89,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| ~21:05 | run_64397a5e | Maria | branch `maria/erp-loop-fixes` 9ba31c0 (same starter-kit as 5ee465a) | running | | | | **Reproducibility check** of the branch-and-bound winner (passes both local bounds; 100 in 10.3 min in 2b8b5ca8). Test run only, no submission |
 | 20:26 | **run_2b8b5ca8** | Maria | branch `maria/erp-loop-fixes` **5ee465a**: all fixes + v1's routing + goto hint, main's calculator | **100** 🎉 | ✅ | **10.3 min** | 244 / $0.31 | All 5 positions 13/13, signed. Investigation **402 s**, ended by itself with **no open questions**; longest repeat 7× (customer portal, then done); one agent sent idle when stuck; 0 model timeouts. **Fast like v1, with main's calculator guard: candidate for main** |
 | ~20:30 (organisers) | **sub_2f274fd2 (SUBMISSION, promoted)** | Organisers | v1 test run 44a626ef | **100** 🎉 | ✅ | **9.6 min** | 249 / $0.30 | **Promoted by the organisers from test run 44a626ef** (after the sandbox outage). **Leaderboard: rank #3, 100, $0.30, 9:34** |
 | 20:24 | **sub_8618fad2 (SUBMISSION, Vamshidhar)** → run_28a384ba | Vamshidhar | package b760b15c (no label) | **100** 🎉 | ✅ | **10.8 min** | 228 / $0.29 | Review **pending**. Once it passes it is the latest passed submission, i.e. **our final package**. Vamshidhar: which code is it? |
