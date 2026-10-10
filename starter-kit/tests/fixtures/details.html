@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Widget A</title></head>
+<body>
+<h1>Widget A</h1>
+
+<!-- Closed: a browser shows only the summary line. -->
+<details>
+  <summary>Technical data</summary>
+  <p>Weight: 12 kg</p>
+  <a href="/arrived/data-sheet">Data sheet</a>
+</details>
+
+<!-- Closed, and its content is only requested from the server once it is opened. -->
+<details id="lazy">
+  <summary>Delivery notes</summary>
+  <p id="notes"></p>
+</details>
+<script>
+  const lazy = document.getElementById('lazy');
+  lazy.addEventListener('toggle', async () => {
+    if (lazy.open) document.getElementById('notes').textContent = await (await fetch('/slow/notes.txt')).text();
+  });
+</script>
+</body>
+</html>

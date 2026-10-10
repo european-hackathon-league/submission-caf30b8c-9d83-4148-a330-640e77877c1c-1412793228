@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+<!-- A search box that belongs to the page header, not to the login. -->
+<form method="get" action="/echo"><label>Search <input name="q"></label></form>
+
+<h1>Sign in</h1>
+$message
+<!-- POST /login checks the two fields and the hidden ticket, sets a session cookie and redirects to /account. -->
+<form method="post" action="/login">
+  <input type="hidden" name="ticket" value="$ticket">
+  <label>User name <input name="username" autocomplete="username" required></label>
+  <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Sign in</button>
+</form>
+</body>
+</html>

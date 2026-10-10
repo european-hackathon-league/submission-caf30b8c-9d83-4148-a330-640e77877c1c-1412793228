@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Shipment 5</title>
+<style>
+  [role=tooltip] { display: none; }
+  button:hover + [role=tooltip] { display: inline; }
+</style>
+</head>
+<body>
+<h1>Shipment 5</h1>
+
+<!-- The status is nowhere on the page but in a tooltip that stays display:none until the pointer is on the button. -->
+<p>Status <button type="button" aria-describedby="status-tip">Show</button>
+  <span id="status-tip" role="tooltip">Delayed until Friday</span></p>
+
+<!-- The same on a table cell instead of a button. -->
+<table>
+  <tr><th>Parcel</th><th>State</th></tr>
+  <tr><td>Parcel 1</td><td aria-describedby="parcel-tip">see note</td></tr>
+</table>
+<span id="parcel-tip" role="tooltip">Held at customs</span>
+
+<!-- The pickup code exists only as pixels; its text is the aria-label of the canvas. -->
+<canvas id="code" width="320" height="60" aria-label="Pickup code: 4821"></canvas>
+<script>
+  const pen = document.getElementById('code').getContext('2d');
+  pen.font = '24px sans-serif';
+  pen.fillText('Pickup code: 4821', 10, 38);
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Send order 17</title></head>
+<body>
+<h1>Send order 17</h1>
+<form method="post" action="/echo">
+  <input type="hidden" name="order" value="17">
+  <input type="hidden" name="confirmed" value="no">
+  <label>Remark <input name="remark"></label>
+  <button type="submit" name="action" value="send">Send order</button>
+</form>
+
+<script>
+  // The browser itself asks before the form goes out; saying no keeps it here.
+  document.querySelector('form').addEventListener('submit', event => {
+    if (!window.confirm('Send order 17 now? This cannot be undone.')) { event.preventDefault(); return; }
+    event.target.elements.confirmed.value = 'yes';
+  });
+</script>
+</body>
+</html>

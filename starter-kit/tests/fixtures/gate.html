@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Stock</title></head>
+<body>
+<h1>Stock</h1>
+
+<section id="gate" aria-label="Access check">
+  <label>Slide all the way to the right <input id="slider" type="range" min="0" max="100" value="0"></label>
+  <label><input id="person" type="checkbox"> I am a person</label>
+  <p id="state" role="status">Locked</p>
+
+  <!-- Nothing in here reacts until the slider is at its maximum AND the box is ticked. -->
+  <fieldset id="area" disabled inert>
+    <legend>Stock query</legend>
+    <label>Item <input id="item" name="item"></label>
+    <label>Warehouse <select id="warehouse" name="warehouse"><option value="n">North</option><option value="s">South</option></select></label>
+    <button type="button" id="check">Check stock</button>
+    <a href="/arrived/stock-report">Stock report</a>
+    <p id="answer"></p>
+  </fieldset>
+</section>
+
+<script>
+  const slider = document.getElementById('slider'), person = document.getElementById('person');
+  const area = document.getElementById('area');
+  const refresh = () => {
+    const open = Number(slider.value) === Number(slider.max) && person.checked;
+    area.disabled = !open;
+    area.inert = !open;
+    document.getElementById('state').textContent = open ? 'Unlocked' : 'Locked';
+  };
+  slider.addEventListener('input', refresh);
+  person.addEventListener('change', refresh);
+  document.getElementById('check').addEventListener('click', () => {
+    document.getElementById('answer').textContent =
+      document.getElementById('item').value + ' (' + document.getElementById('warehouse').value + '): 40 in stock';
+  });
+</script>
+</body>
+</html>

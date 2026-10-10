@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Orders, page $page of $pages</title></head>
+<body>
+<h1>Orders</h1>
+<!-- The server fills in three orders per page (/orders?page=N); the last page has no "Next page" link. -->
+<table>
+  <tr><th>Order</th><th>Item</th><th>Quantity</th></tr>
+$rows
+</table>
+<p>Page $page of $pages</p>
+<nav aria-label="Pages">$previous $next</nav>
+</body>
+</html>

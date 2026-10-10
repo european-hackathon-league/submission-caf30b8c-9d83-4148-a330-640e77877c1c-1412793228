@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Delivery plan</title></head>
+<body>
+<h1>Delivery plan</h1>
+
+<!-- What is shown is local wall-clock time; the exact instant is only in the datetime attribute. -->
+<p>Last change: <time datetime="2031-05-06T14:30:00Z">6 May 2031, 16:30</time></p>
+
+<!-- A table that is no table: one record per line, fields separated by semicolons. -->
+<pre id="csv">item;quantity;unit;remark
+Widget A;40;pcs;
+Widget B;15;pcs;fragile
+Gasket, small;200;pcs;"keep dry; keep flat"</pre>
+
+<!-- The same idea with tab characters (&#9;) as separators; the first record has an empty field in the middle. -->
+<pre id="tsv">part&#9;stock&#9;note
+Bolt M8&#9;&#9;on order
+Nut M8&#9;900&#9;spare</pre>
+</body>
+</html>

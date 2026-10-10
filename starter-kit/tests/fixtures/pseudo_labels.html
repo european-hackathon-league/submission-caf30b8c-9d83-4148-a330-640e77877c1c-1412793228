@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Widget form</title>
+<style>
+  /* The label elements are empty: the stylesheet draws their text from an attribute. */
+  .drawn::before { content: attr(data-label); }
+  td[data-label]::before { content: attr(data-label); font-weight: bold; margin-right: 1em; }
+  .fact::before { content: attr(data-label) ": "; }
+</style>
+</head>
+<body>
+<h1>Widget form</h1>
+
+<form>
+  <!-- Drawn label, nothing else. -->
+  <label for="quantity"><span class="drawn" data-label="Quantity"></span></label>
+  <input id="quantity" name="quantity">
+
+  <!-- Drawn label that also announces itself to screen readers. -->
+  <label for="colour"><span class="drawn" role="img" data-label="Colour" aria-label="Colour"></span></label>
+  <input id="colour" name="colour">
+</form>
+
+<!-- The same trick on table cells: the column names are drawn in front of each value. -->
+<table>
+  <tr><td data-label="Weight">12 kg</td><td data-label="Length">80 cm</td></tr>
+</table>
+
+<!-- And with a separator appended by the stylesheet. -->
+<p><span class="fact" data-label="Material">steel</span></p>
+</body>
+</html>

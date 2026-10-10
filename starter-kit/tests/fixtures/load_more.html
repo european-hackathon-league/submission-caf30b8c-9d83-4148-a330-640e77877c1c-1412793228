@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Messages</title></head>
+<body>
+<h1>Messages</h1>
+<p>Messages about your orders, oldest first. A new message can take a few minutes to show up here; if one is
+  missing, ask the service desk and have the order number at hand. Only the two oldest messages are shown at first.</p>
+<ul id="list">
+  <li>Message 21: Widget A shipped</li>
+  <li>Message 22: Widget B delayed</li>
+</ul>
+<button type="button" id="more">Load more</button>
+
+<script>
+  // Each press appends the next batch at once; after the last batch the button is gone.
+  const batches = [['Message 23: Invoice sent', 'Message 24: Gasket restocked'], ['Message 25: Order 17 closed']];
+  const list = document.getElementById('list'), more = document.getElementById('more');
+  more.addEventListener('click', () => {
+    for (const text of batches.shift()) list.append(Object.assign(document.createElement('li'), { textContent: text }));
+    if (!batches.length) more.remove();
+  });
+</script>
+</body>
+</html>

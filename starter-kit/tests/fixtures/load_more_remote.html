@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Messages</title></head>
+<body>
+<h1>Messages</h1>
+<p>Messages about your orders, oldest first. A new message can take a few minutes to show up here; if one is
+  missing, ask the service desk and have the order number at hand. Only the two oldest messages are shown at first.</p>
+<ul id="list">
+  <li>Message 21: Widget A shipped</li>
+  <li>Message 22: Widget B delayed</li>
+</ul>
+<button type="button" id="more" data-next="/more-messages?after=22">Load more</button>
+
+<script>
+  // Each press asks the server for the next batch. The answer takes a moment, as it does over a real network;
+  // meanwhile the button is disabled. After the last batch the button is gone.
+  const list = document.getElementById('list'), more = document.getElementById('more');
+  more.addEventListener('click', async () => {
+    more.disabled = true;
+    const batch = await (await fetch(more.dataset.next)).json();
+    for (const text of batch.rows) list.append(Object.assign(document.createElement('li'), { textContent: text }));
+    if (!batch.next) { more.remove(); return; }
+    more.dataset.next = batch.next;
+    more.disabled = false;
+  });
+</script>
+</body>
+</html>

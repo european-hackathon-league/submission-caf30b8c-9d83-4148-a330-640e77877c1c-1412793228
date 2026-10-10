@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Catalogue</title></head>
+<body>
+<h1>Catalogue</h1>
+<p>Widget A is available.</p>
+<label>Remark <input id="remark" name="remark"></label>
+<button type="button" id="add">Add Widget A</button>
+<p id="basket">Basket: empty</p>
+
+<!-- Opens by itself shortly after the page has loaded and blocks everything behind it.
+     The large link leads away from the page; only the small × closes the dialog. -->
+<dialog id="popup" aria-label="Newsletter">
+  <h2>Newsletter</h2>
+  <p>Our offers, once a month.</p>
+  <a href="/arrived/newsletter" style="font-size: 24px">Yes, sign me up</a>
+  <button type="button" id="close" aria-label="Close" style="font-size: 9px">×</button>
+</dialog>
+
+<script>
+  document.getElementById('add').addEventListener('click', () => {
+    document.getElementById('basket').textContent = 'Basket: 1 Widget A';
+  });
+  const popup = document.getElementById('popup');
+  document.getElementById('close').addEventListener('click', () => popup.close());
+  popup.addEventListener('cancel', event => event.preventDefault());  // Escape does not close it
+  // 0.4 s after loading, or as many milliseconds as the address asks for: timed_dialog.html?after=1500
+  setTimeout(() => popup.showModal(), Number(new URLSearchParams(location.search).get('after') || 400));
+</script>
+</body>
+</html>

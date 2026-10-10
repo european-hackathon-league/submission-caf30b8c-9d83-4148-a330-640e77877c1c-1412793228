@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Order 17</title>
+<style>.off { display: none; }</style>
+</head>
+<body>
+<h1>Order 17</h1>
+<p>4 × Widget A</p>
+
+<!-- Three controls with one name. The first is disabled, the second is never displayed, only the third works. -->
+<div role="group" aria-label="Invoice">
+  <button type="button" disabled>Open invoice</button>
+  <a class="off" href="/arrived/wrong-invoice">Open invoice</a>
+  <a href="/arrived/invoice-17">Open invoice</a>
+</div>
+
+<!-- Three controls with one name, all of them displayed and enabled. The button does nothing and one link
+     leads somewhere else: only the attributes and the addresses tell them apart. -->
+<div role="group" aria-label="Delivery note">
+  <button type="button" data-placeholder>Open delivery note</button>
+  <a href="/arrived/help">Open delivery note</a>
+  <a href="/arrived/delivery-note-17">Open delivery note</a>
+</div>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Orders</title></head>
+<body>
+<h1>Orders</h1>
+
+<!-- Every visible letter is followed by a zero-width space (&#8203;): searching the page text for the name finds
+     nothing. The real name is the aria-label of the role=img wrapper. -->
+<p><a href="/arrived/order-17"><span role="img" aria-label="Order 17">O&#8203;r&#8203;d&#8203;e&#8203;r&#8203; &#8203;1&#8203;7</span></a></p>
+
+<!-- No label to fall back on: the text itself is cut up by a zero-width space, a zero-width non-joiner, a
+     zero-width joiner, a word joiner and a soft hyphen. -->
+<p>W&#8203;i&#8204;d&#8205;g&#8288;e&#173;t A is in stock</p>
+
+<!-- The same with the zero-width no-break space (U+FEFF, the "byte order mark") between all letters of a word. -->
+<p>G&#65279;a&#65279;s&#65279;k&#65279;e&#65279;t is sold out</p>
+</body>
+</html>

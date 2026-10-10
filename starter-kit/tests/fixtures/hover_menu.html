@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Start</title>
+<style>
+  .menu, .sub { list-style: none; margin: 0; padding: 0; }
+  .menu > li { display: inline-block; position: relative; padding: 8px; }
+  /* The submenu only exists on screen while the pointer is over its parent entry. */
+  .sub { display: none; position: absolute; background: white; border: 1px solid gray; }
+  .has-sub:hover .sub { display: block; }
+</style>
+</head>
+<body>
+<nav aria-label="Main">
+  <ul class="menu">
+    <li><a href="/arrived/home">Home</a></li>
+    <li class="has-sub"><span>Documents</span>
+      <ul class="sub">
+        <li><a href="/arrived/invoices">Invoices</a></li>
+        <li><a href="/arrived/archive">Archive</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+<h1>Start</h1>
+<p>Pick a section from the menu.</p>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>New order</title></head>
+<body>
+<h1>New order</h1>
+
+<!-- One control of every kind. The server answers with a page that lists what it received. -->
+<form method="post" action="/echo">
+  <label>Customer <input name="customer"></label>
+  <label>Remark <textarea name="remark"></textarea></label>
+  <label>Item
+    <select name="item">
+      <option value="">Choose…</option>
+      <option value="wa">Widget A</option>
+      <option value="wb">Widget B</option>
+    </select>
+  </label>
+  <label>Unit
+    <select name="unit">
+      <option value="pcs">Pieces</option>
+      <option value="box">Boxes</option>
+    </select>
+  </label>
+  <fieldset>
+    <legend>Delivery</legend>
+    <label><input type="radio" name="delivery" value="standard" checked> Standard</label>
+    <label><input type="radio" name="delivery" value="express"> Express</label>
+  </fieldset>
+  <label><input type="checkbox" name="gift" value="yes"> Gift wrap</label>
+  <label><input type="checkbox" name="updates" value="yes" checked> Send me updates</label>
+  <label>Priority <input type="range" name="priority" min="1" max="5" value="1"></label>
+  <button type="submit">Place order</button>
+</form>
+
+<!-- A search box that is sent with the Enter key: it has no button. -->
+<form method="get" action="/echo">
+  <label>Find an order <input type="search" name="q"></label>
+</form>
+</body>
+</html>

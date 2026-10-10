@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Inner document</title></head>
+<body>
+<p>Innermost: Widget B costs 12.50</p>
+<label>Note <input id="note" name="note"></label>
+<button type="button" id="save">Save note</button>
+<p id="saved"></p>
+<!-- Followed inside this frame: the address of the outer page does not change. -->
+<a href="/arrived/inner-two">Second inner page</a>
+<script>
+  document.getElementById('save').addEventListener('click', () => {
+    document.getElementById('saved').textContent = 'Saved: ' + document.getElementById('note').value;
+  });
+</script>
+</body>
+</html>

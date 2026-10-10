@@ -1,0 +1,172 @@
+diff --git a/starter-kit/submit.py b/starter-kit/submit.py
+index d234c5c..eb2224a 100644
+--- a/starter-kit/submit.py
++++ b/starter-kit/submit.py
+@@ -22,6 +22,38 @@ CLERK_STEPS, COURIER_STEPS = 120, 25
+ # the time, and the reply's "thought" still leaves it room to check a conversion.
+ CLERK_THINKS, COURIER_THINKS = False, False
+ 
++BATCH_STEPS = 30
++FORM_ACTIONS = ("fill", "select", "set", "click")
++WORKED = ("clicked", "filled", "selected", "set ")  # how a Tab action that took effect starts its result
++
++# How `batch` knows a control again after the page reloaded and every id changed: by what the form itself says about
++# it (tag, type, name or label; for buttons, links and choices also value, text, target and data attributes) and its
++# rank among the controls that look the same. A control that cannot be told apart for sure is not found: the batch
++# stops there and the model goes on from the page as it is.
++LOOK_JS = r"""
++  const tidy = s => (s || '').replace(/[​-‏⁠-⁤﻿­]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
++  const own = e => tidy([...e.childNodes].filter(n => n.nodeType === 3).map(n => n.nodeValue).join(' '));
++  const look = e => {
++    const tag = e.tagName, type = (e.getAttribute('type') || '').toLowerCase(), name = e.getAttribute('name') || '';
++    const field = tag === 'SELECT' || tag === 'TEXTAREA'
++      || (tag === 'INPUT' && !['checkbox', 'radio', 'submit', 'button', 'reset', 'image'].includes(type));
++    if (field) {
++      const label = e.labels && e.labels[0] ? own(e.labels[0]) : tidy(e.getAttribute('aria-label') || e.getAttribute('placeholder'));
++      return [tag, type, name || label].join('␟');
++    }
++    const data = [...e.attributes].filter(a => a.name.startsWith('data-') && a.name !== 'data-aid').map(a => a.name + '=' + a.value);
++    return [tag, type, name, e.getAttribute('value') || '', tag === 'INPUT' ? '' : tidy(e.innerText),
++            e.getAttribute('href') || e.getAttribute('formaction') || '', ...data].join('␟');
++  };
++"""
++MARK_JS = "el => {" + LOOK_JS + """
++  const alike = [...document.querySelectorAll(el.tagName)].filter(other => look(other) === look(el));
++  return {tag: el.tagName, look: look(el), rank: alike.indexOf(el)}; }"""
++FIND_JS = "([tag, wanted, rank]) => {" + LOOK_JS + """
++  const found = [...document.querySelectorAll(tag)].filter(e => look(e) === wanted)[rank];
++  return found ? found.getAttribute('data-aid') : null; }"""
++UNTAG_JS = "() => document.querySelectorAll('[data-aid]').forEach(e => e.removeAttribute('data-aid'))"
++
+ CLERK = """You are the bid clerk of a manufacturer's sales engineering team. Your colleagues have researched a
+ public tender and a calculator has priced it: the BID SHEET below is the final result. You work the tender portal
+ "{site}" at {url} in your own browser tab, and your whole job is to get exactly this bid into the portal's bid
+@@ -51,7 +83,14 @@ Reading the bid sheet
+   a position out, if it has one.
+ 
+ {actions}
+-One more action:
++Two more actions:
++  {{"do": "batch", "actions": [<fill, select, set and click actions, with ids of the page in front of you>]}}
++      Runs them in order and keeps going when the page reloads in between: after a reload each id is matched to
++      the same control on the fresh page (the same field, the same button). This is how you complete a form step
++      in one reply when a choice or an "apply" button reloads the form, or when a step has many fields. It stops
++      at the first action that does not work or whose control is gone, and reports what was done. End a batch
++      with the control that leaves the step, never script past a page you have not seen, and put no other action
++      behind a batch in the same reply.
+   {{"do": "ask_mail", "task": "<what you need and how to recognise it>"}}
+       A colleague who has the bidder's mailbox open in another browser looks for it and answers. This is how you
+       get the signing code (TAN) the portal sends by mail. Ask only after you have triggered the code in the
+@@ -64,7 +103,8 @@ How to work
+   the commercial terms, declarations, a review and a signature. Read each page and give it what it asks for,
+   from the bidder data and the bid sheet. Fill every field the sheet has a value for, optional ones included.
+ - Read the form's own instructions: when entries are saved, what going back does, which fields are required.
+-  Do the fields of a page in one reply, then the control that saves them or moves on.
++- Every reply costs time: do a whole step per reply. Put all its fields and the control that saves them or moves
++  on into one batch, also when options only become valid after an earlier choice was applied.
+ - After each step look at the result. If the form reports an error or did not keep a value, correct that field
+   before you move on.
+ - Declarations: read what each one says. Give the confirmations a valid bid needs; leave unticked, or untick,
+@@ -124,6 +164,91 @@ def bid_sheet(bid: Bid) -> dict:
+             "positions": positions, "omitted_positions": list(bid.omitted), "total_net": _amount(bid.total_net)}
+ 
+ 
++def batch_action(tab: Tab):
++    """The `batch` action for `tab`: form actions in a row, their controls found again after every reload."""
++
++    def control(aid):
++        try:
++            number = int(aid)
++        except (TypeError, ValueError):
++            return None
++        for index, (start, end, frame) in enumerate(tab.frames):
++            if start <= number < end:
++                return index, frame.locator(f'[data-aid="{number}"]')
++        return None
++
++    async def find(mark: tuple) -> str | None:
++        index, tag, look, rank = mark
++        try:
++            return await tab.frames[index][2].evaluate(FIND_JS, [tag, look, rank])
++        except Exception:  # noqa: BLE001  the frame is gone
++            return None
++
++    async def apply(step: dict, aid) -> str:
++        if step["do"] == "fill":
++            return await tab.fill(aid, step.get("text", ""), bool(step.get("enter")))
++        if step["do"] == "select":
++            return await tab.select(aid, step.get("value", ""))
++        if step["do"] == "set":
++            return await tab.set(aid, step.get("value", True))
++        return await tab.click(aid)
++
++    async def tagged() -> bool:
++        try:
++            return bool(await tab.page.main_frame.evaluate("() => !!document.querySelector('[data-aid]')"))
++        except Exception:  # noqa: BLE001  the page is on its way to another one
++            return False
++
++    async def batch(action: dict) -> str:
++        steps = action.get("actions")
++        if not isinstance(steps, list) or not steps:
++            return 'batch needs "actions": a list of fill, select, set and click actions'
++        steps = steps[:BATCH_STEPS]
++        for step in steps:
++            if not isinstance(step, dict) or step.get("do") not in FORM_ACTIONS or step.get("id") is None:
++                return (f"batch not started: it takes {', '.join(FORM_ACTIONS)} actions with an id, not "
++                        f"{json.dumps(step, ensure_ascii=False)[:100]}")
++        marks = []  # every control as it looks now, before anything changes the page
++        for step in steps:
++            found = control(step["id"])
++            if found is None or await found[1].count() == 0:
++                return f"batch not started: there is no element [{step['id']}] on the page"
++            seen = await found[1].evaluate(MARK_JS)
++            marks.append((found[0], seen["tag"], seen["look"], seen["rank"]))
++
++        results, reread = [], False
++        for number, (step, mark) in enumerate(zip(steps, marks)):
++            aid = step["id"]
++            if reread:
++                aid = await find(mark)
++                if aid is None:
++                    results.append(f"stopped before {step['do']} [{step['id']}]: that control is not on the page any "
++                                   "more; go on from the page as it is now")
++                    break
++            result = await apply(step, aid)
++            if not reread and result.startswith("there is no element"):  # the form was redrawn under the old ids
++                await tab.read()
++                reread, aid = True, await find(mark)
++                if aid is not None:
++                    result = await apply(step, aid)
++            results.append(result.replace(f"[{aid}]", f"[{step['id']}]"))
++            if not result.startswith(WORKED):
++                results.append("stopped: that action did not work")
++                break
++            if number + 1 < len(steps) and (step["do"] == "click" or not await tagged()):
++                await tab.read()
++                reread = True
++        if reread:  # the ids the model knows now belong to other controls: let a stray later action find nothing
++            for _, _, frame in tab.frames:
++                try:
++                    await frame.evaluate(UNTAG_JS)
++                except Exception:  # noqa: BLE001
++                    pass
++        return "batch: " + " ; ".join(results)
++
++    return batch
++
++
+ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: dict, brief: str,
+                      deadline: float) -> dict:
+     """Have an agent enter, sign and submit `bid` in the tender portal before `deadline` (a time.time() value).
+@@ -173,8 +298,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
+     system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
+                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
+                           sheet=json.dumps(bid_sheet(bid), ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
+-    clerk = Agent("submit", tender_tab, system, heading, extra={"ask_mail": ask_mail}, deadline=deadline,
+-                  max_steps=CLERK_STEPS, think=CLERK_THINKS)
++    clerk = Agent("submit", tender_tab, system, heading, deadline=deadline, max_steps=CLERK_STEPS, think=CLERK_THINKS,
++                  extra={"ask_mail": ask_mail, "batch": batch_action(tender_tab)})
+     outcome = await clerk.run()
+     receipt = str(outcome.get("answer") or "").strip()
+     notes = str(outcome.get("summary") or "")

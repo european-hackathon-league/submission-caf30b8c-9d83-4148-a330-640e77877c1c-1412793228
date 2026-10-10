@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Catalogue</title></head>
+<body>
+<main>
+  <h1>Catalogue</h1>
+  <p>Widget A is available.</p>
+  <button type="button" id="add">Add Widget A</button>
+  <p id="basket">Basket: empty</p>
+
+  <!-- Like timed_dialog.html, but the dialog sits inside the page's main element and asks something:
+       it holds a form control, so it is not a mere notice. The link still leads away; × closes it. -->
+  <dialog id="popup" aria-label="Quick question">
+    <h2>Quick question</h2>
+    <label>How did you find us?
+      <select name="source"><option>Search engine</option><option>Colleague</option></select>
+    </label>
+    <a href="/arrived/survey" style="font-size: 24px">Send my answer</a>
+    <button type="button" id="close" aria-label="Close" style="font-size: 9px">×</button>
+  </dialog>
+</main>
+
+<script>
+  document.getElementById('add').addEventListener('click', () => {
+    document.getElementById('basket').textContent = 'Basket: 1 Widget A';
+  });
+  const popup = document.getElementById('popup');
+  document.getElementById('close').addEventListener('click', () => popup.close());
+  setTimeout(() => popup.showModal(), 400);
+</script>
+</body>
+</html>
