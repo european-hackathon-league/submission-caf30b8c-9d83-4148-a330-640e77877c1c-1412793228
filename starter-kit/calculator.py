@@ -1,732 +1,518 @@
-"""Deterministic commercial & technical calculation engine for the RFQ-to-Bid challenge.
+"""Deterministic bid arithmetic for the RFQ-to-bid challenge.
 
-Implements all 29 bid rules using exact Decimal arithmetic (ROUND_HALF_UP), locale-aware number parsing
-(de-DE vs en-US), largest-remainder cent allocation, marginal project bonus bands, and shared stock /
-delivery commitment evaluation. Contains zero hardcoded scenario values.
+The agents find and select the evidence; this module only applies the bid rules of the task brief to the structured
+facts they filed: exact Decimal arithmetic, ROUND_HALF_UP to the cent, largest-remainder cent allocation, marginal
+bonus bands, shared stock and delivery commitments. It contains no scenario values and never touches a website.
 """
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
-from typing import Any
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
 
 CENT = Decimal("0.01")
-ZERO = Decimal("0.00")
+ZERO = Decimal("0")
 HUNDRED = Decimal("100")
-THOUSAND = Decimal("1000")
+
+# Mass units to grams and index-rate units to EUR per gram, so any combination the sources use multiplies out.
+MASS_TO_GRAMS = {"mg": Decimal("0.001"), "g": Decimal(1), "kg": Decimal(1000), "t": Decimal(1000000)}
 
 
-def round_cents(value: Decimal | int | float | str) -> Decimal:
-    """Round half up to the nearest cent (0.01)."""
+def round_cents(value) -> Decimal:
     return Decimal(str(value)).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
-def format_de(value: Decimal | int | float | str, decimals: int = 2) -> str:
-    """Format a numeric value in German number format (e.g., 1234,56) without thousands separators."""
-    d = Decimal(str(value))
-    if decimals == 0 or d == d.to_integral_value():
-        if decimals == 0:
-            return str(int(d.to_integral_value(rounding=ROUND_HALF_UP)))
-    quant = Decimal("10") ** (-decimals) if decimals > 0 else Decimal("1")
-    q = d.quantize(quant, rounding=ROUND_HALF_UP)
-    return str(q).replace(".", ",")
+def parse_number(raw, number_format: str | None = None) -> Decimal | None:
+    """A number as written on a page ("1.234,56", "64,853 (en-US)", 12) as a Decimal; None when there is none.
 
-
-format_german_decimal = format_de
-
-
-
-def parse_locale_decimal(raw: str | int | float | Decimal, locale_hint: str | None = None) -> Decimal:
-    """Parse a number string respecting explicit locale hints like '(de-DE)' or '(en-US)'."""
+    `number_format` is "de-DE" (decimal comma) or "en-US" (decimal point); an inline tag in `raw` wins. Without
+    either, the separators decide, and a lone comma is read as a decimal comma, as German sources write it.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
     if isinstance(raw, Decimal):
         return raw
     if isinstance(raw, (int, float)):
         return Decimal(str(raw))
     text = str(raw).strip()
-    if not text:
-        return ZERO
-
-    # Detect inline locale tag e.g. "64,853 (en-US)" or "181.429 (de-DE)"
-    inline_locale = locale_hint
-    m_loc = re.search(r"\((de-DE|en-US)\)", text, re.IGNORECASE)
-    if m_loc:
-        inline_locale = m_loc.group(1)
-
-    # Extract numeric token
-    m_num = re.search(r"[-+]?\d[\d.,\s\u00a0]*", text)
-    if not m_num:
-        raise ValueError(f"Cannot parse decimal from: {raw!r}")
-    token = m_num.group(0).replace(" ", "").replace("\u00a0", "").strip(".,")
-    if not token:
-        raise ValueError(f"Empty numeric token from: {raw!r}")
-
-    loc = (inline_locale or "").lower()
-    if loc == "en-us":
-        # In en-US, ',' is thousands separator and '.' is decimal point
-        cleaned = token.replace(",", "")
-        return Decimal(cleaned)
-    if loc == "de-de":
-        # In de-DE, '.' is thousands separator and ',' is decimal point
-        cleaned = token.replace(".", "").replace(",", ".")
-        return Decimal(cleaned)
-
-    # Heuristic when no explicit locale is given
-    if "," in token and "." in token:
-        if token.rfind(",") > token.rfind("."):
-            # 1.234,56 -> de-DE
-            cleaned = token.replace(".", "").replace(",", ".")
-        else:
-            # 1,234.56 -> en-US
-            cleaned = token.replace(",", "")
-        return Decimal(cleaned)
-    if "," in token:
-        # Check if comma is decimal separator (e.g. 12,34 or 3,15) vs thousands separator
-        parts = token.split(",")
-        if len(parts) == 2 and len(parts[1]) in (1, 2, 4):
-            return Decimal(token.replace(",", "."))
-        if len(parts) == 2 and len(parts[1]) == 3:
-            # Default in German text without en-US tag is comma as decimal unless >1 comma
-            return Decimal(token.replace(",", "."))
-        return Decimal(token.replace(",", ""))
-    if "." in token:
-        parts = token.split(".")
-        if len(parts) > 2:
+    tag = re.search(r"(de-DE|en-US)", text, re.IGNORECASE)
+    fmt = (tag.group(1) if tag else number_format or "").lower()
+    match = re.search(r"[-+]?\d[\d.,'\s  ]*", text)
+    if not match:
+        return None
+    token = re.sub(r"['\s  ]", "", match.group(0)).rstrip(".,")
+    try:
+        if fmt == "en-us":
+            return Decimal(token.replace(",", ""))
+        if fmt == "de-de":
+            return Decimal(token.replace(".", "").replace(",", "."))
+        if "," in token and "." in token:
+            if token.rfind(",") > token.rfind("."):
+                return Decimal(token.replace(".", "").replace(",", "."))
+            return Decimal(token.replace(",", ""))
+        if "," in token:
+            return Decimal(token.replace(",", ".")) if token.count(",") == 1 else Decimal(token.replace(",", ""))
+        if token.count(".") > 1:
             return Decimal(token.replace(".", ""))
         return Decimal(token)
-    return Decimal(token)
-
-
-def parse_timestamp(ts_str: str) -> datetime | None:
-    """Parse ISO-8601 or German/portal date strings into UTC datetime."""
-    if not ts_str:
+    except InvalidOperation:
         return None
-    s = ts_str.strip()
-    # 1. Look for ISO-8601 UTC timestamp first: 2027-01-25T08:00:00Z
-    m_iso = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?Z)", s)
-    if m_iso:
-        iso = m_iso.group(1)
-        if len(iso) == 17:  # YYYY-MM-DDTHH:MMZ
-            return datetime.strptime(iso, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
-        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-
-    # 2. Look for DD.MM.YYYY, HH:MM(:SS) (UTC)
-    m_de_dt = re.search(r"(\d{2})\.(\d{2})\.(\d{4})[,\s]+(\d{2}):(\d{2})(?::(\d{2}))?", s)
-    if m_de_dt:
-        day, month, year, hour, minute, sec = m_de_dt.groups()
-        return datetime(
-            int(year), int(month), int(day), int(hour), int(minute), int(sec or 0), tzinfo=timezone.utc
-        )
-
-    # 3. Look for YYYY-MM-DD
-    m_ymd = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
-    if m_ymd:
-        year, month, day = m_ymd.groups()
-        return datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
-
-    # 4. Look for DD.MM.YYYY
-    m_de_d = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", s)
-    if m_de_d:
-        day, month, year = m_de_d.groups()
-        return datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
-
-    # 5. Look for slash dates with explicit order: 01/05 (MM/TT) 2027 or 17/01 (TT/MM) 2027
-    m_slash = re.search(r"(\d{2})/(\d{2})\s*\((MM/TT|TT/MM|DD/MM)\)\s*[·\s]*(\d{4})", s, re.IGNORECASE)
-    if m_slash:
-        p1, p2, fmt, year = m_slash.groups()
-        if fmt.upper() == "MM/TT":
-            month, day = int(p1), int(p2)
-        else:
-            day, month = int(p1), int(p2)
-        return datetime(int(year), month, day, tzinfo=timezone.utc)
-
-    return None
 
 
-def allocate_cents_largest_remainder(
-    total_cents: int, weights: dict[str, Decimal]
-) -> dict[str, Decimal]:
-    """Allocate `total_cents` across keys proportionally to `weights` using largest remainders.
+def parse_when(raw, end_of_day: bool = False) -> datetime | None:
+    """An ISO 8601 date or timestamp (as the extraction step writes them) as an aware UTC datetime.
 
-    Ties are broken by ascending position identifier (key).
-    Returns allocated EUR amounts (Decimal with 2 decimal places).
+    A value without a time is a whole day: its start, or its last microsecond with `end_of_day`, so that validity
+    periods include both endpoints.
     """
-    if not weights or total_cents <= 0:
-        return {k: ZERO for k in weights}
-    total_weight = sum(weights.values(), Decimal("0"))
-    if total_weight <= 0:
-        return {k: ZERO for k in weights}
-
-    floors: dict[str, int] = {}
-    remainders: dict[str, Decimal] = {}
-    for k, w in weights.items():
-        exact = (Decimal(total_cents) * w) / total_weight
-        fl = int(exact.to_integral_value(rounding=ROUND_FLOOR))
-        floors[k] = fl
-        remainders[k] = exact - Decimal(fl)
-
-    leftover = total_cents - sum(floors.values())
-    # Sort by descending remainder, then ascending position key
-    ordered_keys = sorted(weights.keys(), key=lambda k: (-remainders[k], k))
-    for k in ordered_keys[: max(0, leftover)]:
-        floors[k] += 1
-
-    return {k: (Decimal(c) * CENT).quantize(CENT) for k, c in floors.items()}
+    if not raw:
+        return None
+    text = str(raw).strip()
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            day = datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+            return day + timedelta(days=1) - timedelta(microseconds=1) if end_of_day else day
+        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        german = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[,\s]+(\d{1,2}):(\d{2}))?", text)
+        if not german:
+            return None
+        day, month, year, hour, minute = german.groups()
+        when = datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0))
+        if hour is None and end_of_day:
+            when += timedelta(days=1) - timedelta(microseconds=1)
+    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
 
 
-def normalize_cert(value: str | None) -> str:
-    """Normalize certification strings so 'Keine gefordert', 'Keine', '', '-' match."""
-    if not value:
-        return "keine"
-    v = re.sub(r"\s+", " ", value.strip()).lower()
-    if v in ("", "-", "—", "none", "keine", "keine gefordert", "nicht gefordert", "ohne"):
-        return "keine"
-    return v
+def allocate_cents(total_cents: int, weights: dict[str, Decimal], method: str = "largest_remainder") -> dict[str, Decimal]:
+    """Split `total_cents` across the keys in proportion to `weights`, as EUR amounts that sum exactly.
+
+    Every share is floored to the cent; the cents left over go out by `method`: "largest_remainder" (ties to the
+    lower key), "remainder_to_first", "remainder_to_last" or "remainder_to_largest" (the biggest weight).
+    """
+    keys = sorted(weights)
+    total_weight = sum(weights.values(), ZERO)
+    if not keys or total_cents <= 0 or total_weight <= 0:
+        return {key: ZERO for key in keys}
+    exact = {key: Decimal(total_cents) * weights[key] / total_weight for key in keys}
+    cents = {key: int(exact[key].to_integral_value(rounding=ROUND_FLOOR)) for key in keys}
+    left = total_cents - sum(cents.values())
+    if method == "remainder_to_first":
+        cents[keys[0]] += left
+    elif method == "remainder_to_last":
+        cents[keys[-1]] += left
+    elif method == "remainder_to_largest":
+        cents[max(keys, key=lambda key: (weights[key], -keys.index(key)))] += left
+    else:
+        for key in sorted(keys, key=lambda key: (-(exact[key] - cents[key]), key))[:left]:
+            cents[key] += 1
+    return {key: Decimal(cents[key]) * CENT for key in keys}
 
 
-def normalize_mounting(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"\s+", " ", value.strip()).lower()
+def same_text(a: str | None, b: str | None) -> bool:
+    """Two attribute values name the same thing: case, spacing and punctuation aside."""
+    def norm(value):
+        return re.sub(r"[^0-9a-zäöüß]+", "", (value or "").lower())
+    return norm(a) == norm(b)
+
+
+NO_CERTIFICATE = ("", "-", "keine", "kein", "ohne", "none", "no", "n/a", "na", "nicht gefordert", "keine gefordert",
+                  "nicht erforderlich", "keine erforderlich", "entfällt")
+
+
+def same_certification(a: str | None, b: str | None) -> bool:
+    """Certifications match, with every way of writing "none required" counting as the same."""
+    def norm(value):
+        text = re.sub(r"\s+", " ", (value or "").strip().lower()).strip(" .—–")
+        return "" if text in NO_CERTIFICATE else text
+    return same_text(norm(a), norm(b))
 
 
 @dataclass
-class TenderPosition:
+class Position:
     position: str
     requirement_ref: str
-    original_quantity: int
-    unit: str = "Stk"
+    quantity: int
+    is_set: bool = False  # the quantity counts sets, not pieces
     description: str = ""
 
 
 @dataclass
-class QAClarification:
+class Clarification:
+    """One answer of the tender's Q&A, as far as it changes the bid."""
     number: str
-    timestamp: datetime
-    text: str
-    withdrawn_number: str | None = None
-    # Quantity update: (position, new_quantity, unit)
-    quantity_changes: list[tuple[str, int, str]] = field(default_factory=list)
-    # Technical amendment: (revision, requirement_ref, attr_name, attr_value)
-    tech_amendments: list[tuple[str, str, str, Any]] = field(default_factory=list)
-    # Position commercial/operational assignments
-    condition_groups: dict[str, str] = field(default_factory=dict)  # pos -> K-xxxx
-    packaging_tariffs: dict[str, str] = field(default_factory=dict)  # pos -> VP-xxxx
-    delivery_commitments: dict[str, str] = field(default_factory=dict)  # pos -> TZ-xxxx
-    setup_pools: dict[str, str] = field(default_factory=dict)  # pos -> RP-xxxx
-    bonus_plans: dict[str, str] = field(default_factory=dict)  # pos -> PB-xxxx
-    ordinary_setup_fees: dict[str, Decimal] = field(default_factory=dict)  # pos -> EUR
+    when: datetime | None
+    withdraws: list[str] = field(default_factory=list)
+    quantity_changes: list[tuple[str, int, bool | None]] = field(default_factory=list)  # position, quantity, is_set
+    amendments: list[tuple[str, str, str, str]] = field(default_factory=list)  # revision, requirement, attribute, value
+    assignments: dict[str, dict[str, str]] = field(default_factory=dict)  # position -> {kind: key}
+    setup_fees: dict[str, Decimal] = field(default_factory=dict)  # position -> ordinary setup fee, EUR
 
 
 @dataclass
-class RequirementSpec:
-    req_id: str
-    bore_mm: int
-    stroke_mm: int
-    pressure_bar: int
-    mounting: str
-    certification: str
-    catalogue_group: str
-    is_usable_stroke: bool = False
-    end_reserve_key: str | None = None
-    pieces_per_set: int = 1
+class Requirement:
+    ref: str
+    bore_mm: int | None = None
+    stroke_mm: int | None = None
+    pressure_bar: int | None = None
+    mounting: str | None = None
+    certification: str | None = None
+    catalogue_group: str | None = None
+    usable_travel: bool = False  # the stroke is the usable travel: add twice the per-end reserve
+    reserve_key: str | None = None
+    pieces_per_set: int | None = None
+
+    def missing(self) -> list[str]:
+        return [name for name in ("bore_mm", "stroke_mm", "pressure_bar", "mounting") if getattr(self, name) is None]
 
 
 @dataclass
 class PriceCondition:
-    valid_from: datetime
-    valid_to: datetime
-    currency: str  # "EUR" or "USD"
-    fx_key: str | None  # e.g. "FX-xxxx"
-    price_unit: int  # e.g. 1 or 100
-    locale: str  # "de-DE" or "en-US"
-    scales: list[tuple[int, Decimal]] = field(default_factory=list)  # (min_qty, price_per_price_unit)
+    valid_from: datetime | None
+    valid_to: datetime | None
+    currency: str = "EUR"
+    fx_key: str | None = None
+    price_unit: int = 1  # the scale prices are for this many pieces
+    scales: list[tuple[int, Decimal]] = field(default_factory=list)  # minimum quantity, price
+
+    def valid_on(self, when: datetime) -> bool:
+        return (self.valid_from is None or self.valid_from <= when) and (self.valid_to is None or when <= self.valid_to)
 
 
 @dataclass
-class ErpMaterial:
-    material_number: str
-    catalogue_group: str
-    status: str  # "01" (active) or "03" (blocked)
-    bore_mm: int
-    stroke_mm: int
-    pressure_bar: int
-    mounting: str
-    certification: str
-    pack_size: int = 1  # Packinhalt (Stück/Karton)
-    allocation_weight_g: Decimal = ZERO  # Umlagegewicht (g/Stück)
-    surcharge_mass_g: Decimal = ZERO  # Zuschlagsmasse (g/Stück)
-    price_index_key: str | None = None  # Preisindex (e.g. MET-xxxx)
-    stock_lead_weeks: int = 0
-    prod_lead_weeks: int = 0
-    free_stock: int = 0
+class Material:
+    number: str
+    active: bool | None = None
+    catalogue_group: str | None = None
+    bore_mm: int | None = None
+    stroke_mm: int | None = None
+    pressure_bar: int | None = None
+    mounting: str | None = None
+    certification: str | None = None
+    carton_size: int | None = None
+    allocation_mass_g: Decimal | None = None
+    surcharge_mass_g: Decimal | None = None
+    index_code: str | None = None
+    stock: int | None = None
+    stock_lead_weeks: int | None = None
+    production_lead_weeks: int | None = None
     conditions: list[PriceCondition] = field(default_factory=list)
 
+    def matches(self, need: Requirement) -> bool:
+        return (self.bore_mm == need.bore_mm and self.stroke_mm == need.stroke_mm
+                and self.pressure_bar == need.pressure_bar and same_text(self.mounting, need.mounting)
+                and same_certification(self.certification, need.certification))
+
 
 @dataclass
-class DeliveryCommitmentRule:
-    key: str
-    material_number: str
-    lead_weeks: int
-    max_pooled_qty: int
+class Commitment:
+    material: str
+    weeks: int
+    max_quantity: int | None
 
 
 @dataclass
 class BonusBand:
-    lower_eur: Decimal
-    upper_eur: Decimal | None  # None means unlimited
-    rate_percent: Decimal
+    lower: Decimal
+    upper: Decimal | None  # None: no upper limit
+    percent: Decimal
 
 
 @dataclass
-class MailRules:
-    # Discount approval (latest <= scenario_date from leitung@ for exact ref)
-    discount_percent: Decimal = ZERO
-    discount_min_order_eur: Decimal = ZERO
-    # FX rates: key -> EUR per 1 unit of foreign currency
-    fx_rates: dict[str, Decimal] = field(default_factory=dict)
-    # Technical end reserves: (revision, reserve_key) -> reserve_mm_per_end (or key -> mm)
-    end_reserves: dict[str, tuple[str | None, int]] = field(default_factory=dict)
-    # Packaging tariffs: key -> EUR per carton
-    packaging_tariffs: dict[str, Decimal] = field(default_factory=dict)
-    # Delivery commitments: key -> DeliveryCommitmentRule
-    delivery_commitments: dict[str, DeliveryCommitmentRule] = field(default_factory=dict)
-    # Setup pools: key -> total pool fee EUR
-    setup_pools: dict[str, Decimal] = field(default_factory=dict)
-    # Project bonus plans: key -> list of BonusBand
-    bonus_plans: dict[str, list[BonusBand]] = field(default_factory=dict)
-    # Commercial condition groups: key -> "base_only" | "base_and_surcharge" | "neither"
-    condition_clauses: dict[str, str] = field(default_factory=dict)
-    # Metal price indices valid on scenario_date: key -> EUR per kg
-    metal_indices: dict[str, Decimal] = field(default_factory=dict)
+class Authorities:
+    """What the authorized records say, each key already resolved to its latest applicable record."""
+    discount_percent: Decimal | None = None  # None: no approval
+    discount_min_order: Decimal | None = None
+    clauses: dict[str, str] = field(default_factory=dict)  # group -> base_only | base_and_surcharge | none
+    index_rates: dict[str, Decimal] = field(default_factory=dict)  # code -> EUR per gram
+    reserves: dict[str, tuple[str | None, int]] = field(default_factory=dict)  # key -> (revision, mm per end)
+    tariffs: dict[str, Decimal] = field(default_factory=dict)  # key -> EUR per carton
+    commitments: dict[str, Commitment] = field(default_factory=dict)
+    fx: dict[str, Decimal] = field(default_factory=dict)  # key -> EUR per currency unit
+    pools: dict[str, tuple[Decimal, str]] = field(default_factory=dict)  # key -> (fee EUR, allocation method)
+    bonus: dict[str, list[BonusBand]] = field(default_factory=dict)
 
 
 @dataclass
-class CalculatedPosition:
+class Line:
     position: str
     material_number: str
     quantity: int
-    unit_price: Decimal
-    lead_time_weeks: int
-    base_unit_price: Decimal
-    surcharge_per_unit: Decimal
-    packaging_per_unit: Decimal
-    rebate_total: Decimal
-    # Configurator metadata for site form filling
-    bore_mm: int = 0
-    stroke_mm: int = 0
-    mounting: str = ""
-    certification: str = ""
-
-    def to_schema_dict(self) -> dict[str, Any]:
-        return {
-            "position": self.position,
-            "material_number": self.material_number,
-            "quantity": int(self.quantity),
-            "unit_price": float(self.unit_price),
-            "lead_time_weeks": int(self.lead_time_weeks),
-            "base_unit_price": float(self.base_unit_price),
-            "surcharge_per_unit": float(self.surcharge_per_unit),
-            "packaging_per_unit": float(self.packaging_per_unit),
-            "rebate_total": float(self.rebate_total),
-        }
+    unit_price: Decimal | None = None
+    lead_time_weeks: int | None = None
+    base_unit_price: Decimal | None = None
+    surcharge_per_unit: Decimal | None = None
+    packaging_per_unit: Decimal | None = None
+    rebate_total: Decimal | None = None
+    material: Material | None = None
+    gaps: list[str] = field(default_factory=list)  # what kept a field from being worked out
 
 
 @dataclass
-class BidCalculationResult:
+class Bid:
     tender_reference: str
-    decision: str  # "bid" or "no_bid"
-    currency: str
+    decision: str
     discount_percent: Decimal
-    positions: list[CalculatedPosition]
+    lines: list[Line]
     total_net: Decimal
-    notes: str = ""
+    omitted: list[str] = field(default_factory=list)  # positions that could not be priced
+    notes: list[str] = field(default_factory=list)
 
-    def to_schema_dict(self) -> dict[str, Any]:
-        res: dict[str, Any] = {
-            "tender_reference": self.tender_reference,
-            "decision": self.decision,
-            "currency": self.currency,
-            "discount_percent": float(self.discount_percent)
-            if self.discount_percent != self.discount_percent.to_integral_value()
-            else int(self.discount_percent),
-            "positions": [p.to_schema_dict() for p in self.positions],
-            "total_net": float(self.total_net),
-        }
-        if self.notes:
-            res["notes"] = self.notes[:4000]
-        return res
+    def answer(self) -> dict:
+        def number(value):
+            return int(value) if value == value.to_integral_value() else float(value)
+        positions = []
+        for line in self.lines:
+            entry = {"position": line.position, "material_number": line.material_number, "quantity": line.quantity,
+                     "unit_price": float(line.unit_price), "lead_time_weeks": line.lead_time_weeks}
+            for name in ("base_unit_price", "surcharge_per_unit", "packaging_per_unit", "rebate_total"):
+                if getattr(line, name) is not None:
+                    entry[name] = float(getattr(line, name))
+            positions.append(entry)
+        return {"tender_reference": self.tender_reference, "decision": self.decision, "currency": "EUR",
+                "discount_percent": number(self.discount_percent), "positions": positions,
+                "total_net": float(self.total_net)}
 
 
-def calculate_bid(
-    tender_reference: str,
-    scenario_date: datetime,
-    governing_revision: str,
-    positions: list[TenderPosition],
-    clarifications: list[QAClarification],
-    requirements: dict[str, RequirementSpec],
-    materials: list[ErpMaterial],
-    mail_rules: MailRules,
-) -> BidCalculationResult:
-    """Execute all 29 rules deterministically to produce the complete BidCalculationResult."""
-    # Filter clarifications up to scenario_date and sort chronologically (oldest to newest)
-    valid_qa = [q for q in clarifications if q.timestamp <= scenario_date]
-    valid_qa.sort(key=lambda q: (q.timestamp, q.number))
+def active_clarifications(clarifications: list[Clarification], scenario: datetime) -> list[Clarification]:
+    """The answers that count, oldest first: dated no later than the scenario date and not withdrawn by another."""
+    dated = [c for c in clarifications if c.when is None or c.when <= scenario]
+    withdrawn = {str(number).strip() for c in dated for number in c.withdraws}
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    return sorted((c for c in dated if c.number.strip() not in withdrawn), key=lambda c: (c.when or floor, c.number))
 
-    # 1. Identify withdrawn Q&A numbers
-    withdrawn_numbers: set[str] = set()
-    for q in valid_qa:
-        if q.withdrawn_number:
-            withdrawn_numbers.add(str(q.withdrawn_number).strip())
 
-    active_qa = [q for q in valid_qa if str(q.number).strip() not in withdrawn_numbers]
+def resolve_requirements(requirements: dict[str, Requirement], governing_revision: str | None,
+                         answers: list[Clarification], authorities: Authorities) -> tuple[dict[str, Requirement], dict[str, str]]:
+    """The governing requirements after scoped amendments and the usable-travel derivation.
 
-    # 2. Apply scoped technical amendments to governing revision requirements
-    resolved_reqs: dict[str, RequirementSpec] = {
-        k: RequirementSpec(
-            req_id=v.req_id,
-            bore_mm=v.bore_mm,
-            stroke_mm=v.stroke_mm,
-            pressure_bar=v.pressure_bar,
-            mounting=v.mounting,
-            certification=v.certification,
-            catalogue_group=v.catalogue_group,
-            is_usable_stroke=v.is_usable_stroke,
-            end_reserve_key=v.end_reserve_key,
-            pieces_per_set=v.pieces_per_set,
-        )
-        for k, v in requirements.items()
-    }
+    Returns them with, per requirement that still waits for a reserve, what it waits for.
+    """
+    resolved = {ref: replace(need) for ref, need in requirements.items()}
+    for answer in answers:  # oldest first, so the latest amendment wins per attribute
+        for revision, ref, attribute, value in answer.amendments:
+            need = resolved.get(ref)
+            if need is None or not governing_revision or not same_text(revision, governing_revision):
+                continue
+            name = attribute.lower()
+            number = parse_number(value)
+            if name in ("stroke", "bore", "pressure") and number is not None:
+                setattr(need, {"stroke": "stroke_mm", "bore": "bore_mm", "pressure": "pressure_bar"}[name], int(number))
+            elif name in ("mounting", "certification"):
+                setattr(need, name, str(value).strip())
+    waiting: dict[str, str] = {}
+    for ref, need in resolved.items():
+        if not need.usable_travel or need.stroke_mm is None:
+            continue
+        entry = authorities.reserves.get(need.reserve_key or "")
+        if entry is None and not need.reserve_key:  # the release may name only the revision
+            bound = [e for e in authorities.reserves.values() if e[0] and same_text(e[0], governing_revision)]
+            entry = bound[0] if len(bound) == 1 else None
+        if entry is None or (entry[0] and governing_revision and not same_text(entry[0], governing_revision)):
+            waiting[ref] = need.reserve_key or "the per-end reserve"
+            continue
+        need.stroke_mm += 2 * entry[1]
+        need.usable_travel = False
+    return resolved, waiting
 
-    for q in active_qa:
-        for rev, req_ref, attr_name, attr_val in q.tech_amendments:
-            if rev.strip() == governing_revision.strip() and req_ref in resolved_reqs:
-                spec = resolved_reqs[req_ref]
-                attr = attr_name.lower()
-                if "hub" in attr or "stroke" in attr or "stellweg" in attr:
-                    spec.stroke_mm = int(attr_val)
-                elif "bohrung" in attr or "bore" in attr:
-                    spec.bore_mm = int(attr_val)
-                elif "druck" in attr or "pressure" in attr:
-                    spec.pressure_bar = int(attr_val)
-                elif "befestigung" in attr or "mounting" in attr:
-                    spec.mounting = str(attr_val).strip()
-                elif "zertifizierung" in attr or "cert" in attr:
-                    spec.certification = str(attr_val).strip()
 
-    # 3. Apply technical derivation (nutzbarer Weg + 2 * end reserve from revision-specific Technikfreigabe)
-    for req_ref, spec in resolved_reqs.items():
-        if spec.is_usable_stroke and spec.end_reserve_key:
-            res_entry = mail_rules.end_reserves.get(spec.end_reserve_key)
-            if res_entry is not None:
-                rev_bound, reserve_mm = res_entry
-                if rev_bound is None or rev_bound.strip() == governing_revision.strip():
-                    spec.stroke_mm = spec.stroke_mm + 2 * int(reserve_mm)
-
-    # 4. Resolve per-position quantities and Q&A commercial/operational keys
-    pos_qty_raw: dict[str, tuple[int, str]] = {
-        p.position: (p.original_quantity, p.unit) for p in positions
-    }
-    pos_cond_group: dict[str, str] = {}
-    pos_pack_key: dict[str, str] = {}
-    pos_deliv_key: dict[str, str] = {}
-    pos_pool_key: dict[str, str] = {}
-    pos_bonus_key: dict[str, str] = {}
-    pos_ordinary_setup: dict[str, Decimal] = {}
-
-    for q in active_qa:
-        for pos_id, new_qty, unit in q.quantity_changes:
-            if pos_id in pos_qty_raw:
-                orig_unit = pos_qty_raw[pos_id][1]
-                pos_qty_raw[pos_id] = (int(new_qty), unit or orig_unit)
-        for pos_id, k in q.condition_groups.items():
-            pos_cond_group[pos_id] = k
-        for pos_id, k in q.packaging_tariffs.items():
-            pos_pack_key[pos_id] = k
-        for pos_id, k in q.delivery_commitments.items():
-            pos_deliv_key[pos_id] = k
-        for pos_id, k in q.setup_pools.items():
-            pos_pool_key[pos_id] = k
-        for pos_id, k in q.bonus_plans.items():
-            pos_bonus_key[pos_id] = k
-        for pos_id, fee in q.ordinary_setup_fees.items():
-            pos_ordinary_setup[pos_id] = Decimal(str(fee))
-
-    # Convert Satz -> Stück using governing specification's pieces_per_set
-    final_quantities: dict[str, int] = {}
+def final_quantities(positions: list[Position], answers: list[Clarification],
+                     requirements: dict[str, Requirement]) -> tuple[dict[str, int], list[str]]:
+    """Each position's quantity in pieces: the tender's, replaced by the latest answer that changes it, sets
+    converted with the requirement's pieces per set. Also the positions whose set size is unknown."""
+    raw = {p.position: (p.quantity, p.is_set) for p in positions}
+    for answer in answers:
+        for position, quantity, is_set in answer.quantity_changes:
+            if position in raw:
+                raw[position] = (quantity, raw[position][1] if is_set is None else is_set)
+    pieces, unknown = {}, []
     for p in positions:
-        qty_val, unit_str = pos_qty_raw[p.position]
-        spec = resolved_reqs.get(p.requirement_ref)
-        mult = 1
-        if "satz" in (unit_str or p.unit).lower() and spec and spec.pieces_per_set > 1:
-            mult = spec.pieces_per_set
-        final_quantities[p.position] = int(qty_val) * mult
+        quantity, is_set = raw[p.position]
+        if is_set:
+            need = requirements.get(p.requirement_ref)
+            if need is None or not need.pieces_per_set:
+                unknown.append(p.position)
+                continue
+            quantity *= need.pieces_per_set
+        pieces[p.position] = quantity
+    return pieces, unknown
 
-    # 5. Match active ERP material for each position
-    matched_materials: dict[str, ErpMaterial] = {}
-    for p in sorted(positions, key=lambda x: x.position):
-        spec = resolved_reqs.get(p.requirement_ref)
-        if not spec:
-            return BidCalculationResult(
-                tender_reference=tender_reference,
-                decision="no_bid",
-                currency="EUR",
-                discount_percent=ZERO,
-                positions=[],
-                total_net=ZERO,
-                notes=f"Missing specification requirement {p.requirement_ref} for position {p.position}",
-            )
-        candidates = [
-            m
-            for m in materials
-            if m.status == "01"
-            and (not spec.catalogue_group or m.catalogue_group == spec.catalogue_group)
-            and m.bore_mm == spec.bore_mm
-            and m.stroke_mm == spec.stroke_mm
-            and m.pressure_bar == spec.pressure_bar
-            and normalize_mounting(m.mounting) == normalize_mounting(spec.mounting)
-            and normalize_cert(m.certification) == normalize_cert(spec.certification)
-        ]
-        if not candidates:
-            # Check if any active material matches even without catalogue_group filter
-            candidates = [
-                m
-                for m in materials
-                if m.status == "01"
-                and m.bore_mm == spec.bore_mm
-                and m.stroke_mm == spec.stroke_mm
-                and m.pressure_bar == spec.pressure_bar
-                and normalize_mounting(m.mounting) == normalize_mounting(spec.mounting)
-                and normalize_cert(m.certification) == normalize_cert(spec.certification)
-            ]
-        if not candidates:
-            return BidCalculationResult(
-                tender_reference=tender_reference,
-                decision="no_bid",
-                currency="EUR",
-                discount_percent=ZERO,
-                positions=[],
-                total_net=ZERO,
-                notes=f"No active matching ERP material for position {p.position} ({p.requirement_ref})",
-            )
-        matched_materials[p.position] = candidates[0]
 
-    # 6. Compute per-position EUR base_unit_price (valid condition on scenario_date, scale, currency FX, HALF_UP to cents)
-    base_unit_prices: dict[str, Decimal] = {}
-    for p in positions:
-        mat = matched_materials[p.position]
-        qty = final_quantities[p.position]
-        valid_conds = [
-            c for c in mat.conditions if c.valid_from <= scenario_date <= c.valid_to
-        ]
-        if not valid_conds:
-            valid_conds = mat.conditions
-        if not valid_conds:
-            raise ValueError(f"No price conditions found for material {mat.material_number}")
-        cond = valid_conds[0]
+def match_material(need: Requirement, materials: list[Material]) -> Material | None:
+    """The active material that equals the requirement in every attribute; its catalogue group first."""
+    exact = [m for m in materials if m.active and m.matches(need)]
+    grouped = [m for m in exact if need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
+    return (grouped or exact or [None])[0]
 
-        # Select scale with highest min_qty <= qty
-        applicable_scales = [s for s in cond.scales if s[0] <= qty]
-        if applicable_scales:
-            applicable_scales.sort(key=lambda s: s[0], reverse=True)
-            scale_price = applicable_scales[0][1]
+
+def merged_assignments(answers: list[Clarification]) -> tuple[dict[str, dict[str, str]], dict[str, Decimal]]:
+    keys: dict[str, dict[str, str]] = {}
+    fees: dict[str, Decimal] = {}
+    for answer in answers:
+        for position, assigned in answer.assignments.items():
+            keys.setdefault(position, {}).update({kind: key for kind, key in assigned.items() if key})
+        fees.update(answer.setup_fees)
+    return keys, fees
+
+
+def base_price(material: Material, quantity: int, scenario: datetime, authorities: Authorities) -> tuple[Decimal | None, str]:
+    """The EUR base price per piece: the condition valid on the scenario date, the highest scale reached, the price
+    unit normalised, converted with the condition's FX key and rounded to the cent."""
+    valid = [c for c in material.conditions if c.scales and c.valid_on(scenario)]
+    if not valid:
+        return None, "no price condition valid on the scenario date"
+    condition = valid[0]
+    reached = [scale for scale in condition.scales if scale[0] <= quantity]
+    if not reached:
+        return None, "the quantity is below the lowest price scale"
+    price = max(reached, key=lambda scale: scale[0])[1] / Decimal(condition.price_unit or 1)
+    if condition.currency.upper() != "EUR":
+        rate = authorities.fx.get(condition.fx_key or "")
+        if rate is None:
+            return None, f"no FX fixing for {condition.fx_key or condition.currency}"
+        price *= rate
+    return round_cents(price), ""
+
+
+def calculate_bid(tender_reference: str, scenario: datetime, governing_revision: str | None,
+                  positions: list[Position], clarifications: list[Clarification],
+                  requirements: dict[str, Requirement], materials: list[Material], authorities: Authorities,
+                  no_material: set[str] | None = None) -> Bid:
+    """Apply the bid rules. `no_material` names the requirements the agents searched without finding an active
+    match: one of them makes the answer a no_bid. Positions that lack evidence are left out (partial bid)."""
+    answers = active_clarifications(clarifications, scenario)
+    needs, waiting = resolve_requirements(requirements, governing_revision, answers, authorities)
+    quantities, unknown_sets = final_quantities(positions, answers, needs)
+    assigned, setup_fees = merged_assignments(answers)
+    notes: list[str] = []
+    omitted: list[str] = []
+
+    lines: dict[str, Line] = {}
+    for p in sorted(positions, key=lambda p: p.position):
+        need = needs.get(p.requirement_ref)
+        if need is not None and p.requirement_ref not in waiting and not need.missing():
+            material = match_material(need, materials)
+            if material is None and p.requirement_ref in (no_material or set()):
+                approved = authorities.discount_percent or ZERO
+                conditional = bool(authorities.discount_min_order)
+                return Bid(tender_reference, "no_bid", ZERO if conditional else approved, [], ZERO,
+                           notes=[f"no active material matches requirement {p.requirement_ref} (position {p.position})"])
         else:
-            # Fallback to lowest min_qty scale
-            cond_scales = sorted(cond.scales, key=lambda s: s[0])
-            scale_price = cond_scales[0][1]
+            material = None
+        if material is None or p.position not in quantities:
+            omitted.append(p.position)
+            notes.append(f"position {p.position}: " + ("set size unknown" if p.position in unknown_sets
+                                                       else f"no material resolved for {p.requirement_ref}"))
+            continue
+        lines[p.position] = Line(p.position, material.number, quantities[p.position], material=material)
 
-        price_per_piece = scale_price / Decimal(cond.price_unit or 1)
-        if cond.currency.upper() != "EUR":
-            fx_rate = Decimal("1")
-            if cond.fx_key and cond.fx_key in mail_rules.fx_rates:
-                fx_rate = mail_rules.fx_rates[cond.fx_key]
-            elif mail_rules.fx_rates:
-                fx_rate = next(iter(mail_rules.fx_rates.values()))
-            eur_base = round_cents(price_per_piece * fx_rate)
-        else:
-            eur_base = round_cents(price_per_piece)
-        base_unit_prices[p.position] = eur_base
+    for line in list(lines.values()):
+        line.base_unit_price, why = base_price(line.material, line.quantity, scenario, authorities)
+        if line.base_unit_price is None:
+            notes.append(f"position {line.position}: {why}")
+            omitted.append(line.position)
+            del lines[line.position]
 
-    # 7. Evaluate conditional director discount approval against undiscounted net order value
-    undiscounted_order_value = round_cents(
-        sum(
-            Decimal(final_quantities[p.position]) * base_unit_prices[p.position]
-            for p in positions
-        )
-    )
-    if mail_rules.discount_percent > ZERO:
-        if undiscounted_order_value >= mail_rules.discount_min_order_eur:
-            approved_discount_pct = mail_rules.discount_percent
-        else:
-            approved_discount_pct = ZERO
-    else:
-        approved_discount_pct = ZERO
+    # The approval's threshold looks at the undiscounted goods value: quantities times EUR base prices.
+    goods = {key: round_cents(Decimal(line.quantity) * line.base_unit_price) for key, line in lines.items()}
+    order_value = round_cents(sum((Decimal(l.quantity) * l.base_unit_price for l in lines.values()), ZERO))
+    discount = authorities.discount_percent or ZERO
+    if discount and authorities.discount_min_order is not None and order_value < authorities.discount_min_order:
+        discount = ZERO
+        notes.append("the conditional discount approval misses its minimum order value")
+    factor = (HUNDRED - discount) / HUNDRED
 
-    # 8. Shared setup pool allocation (by quantity * allocation_weight_g in cents, largest remainders)
-    allocated_pool_setup_eur: dict[str, Decimal] = {p.position: ZERO for p in positions}
-    pools_to_positions: dict[str, list[str]] = {}
-    for pos_id, pool_key in pos_pool_key.items():
-        if pool_key and pool_key in mail_rules.setup_pools:
-            pools_to_positions.setdefault(pool_key, []).append(pos_id)
+    def members(kind: str, known) -> dict[str, list[str]]:
+        groups: dict[str, list[str]] = {}
+        for key in lines:
+            assigned_key = assigned.get(key, {}).get(kind)
+            if assigned_key and assigned_key in known:
+                groups.setdefault(assigned_key, []).append(key)
+        return groups
 
-    for pool_key, member_positions in pools_to_positions.items():
-        pool_fee_eur = mail_rules.setup_pools[pool_key]
-        pool_fee_cents = int(round_cents(pool_fee_eur * HUNDRED))
-        weights = {
-            pos_id: Decimal(final_quantities[pos_id]) * matched_materials[pos_id].allocation_weight_g
-            for pos_id in member_positions
-        }
-        alloc = allocate_cents_largest_remainder(pool_fee_cents, weights)
-        for pos_id, amt in alloc.items():
-            allocated_pool_setup_eur[pos_id] += amt
+    pool_share = {key: ZERO for key in lines}
+    for pool, keys in members("setup_pool", authorities.pools).items():
+        fee, method = authorities.pools[pool]
+        weights = {key: Decimal(lines[key].quantity) * (lines[key].material.allocation_mass_g or ZERO) for key in keys}
+        if any(weight <= 0 for weight in weights.values()):
+            for key in keys:
+                lines[key].gaps.append("allocation mass")
+            continue
+        for key, share in allocate_cents(int(round_cents(fee) * 100), weights, method).items():
+            pool_share[key] += share
 
-    # 9. Project bonus calculation and allocation (marginal bands on eligible undiscounted EUR goods total)
-    allocated_bonus_eur: dict[str, Decimal] = {p.position: ZERO for p in positions}
-    plans_to_positions: dict[str, list[str]] = {}
-    for pos_id, plan_key in pos_bonus_key.items():
-        if plan_key and plan_key in mail_rules.bonus_plans:
-            plans_to_positions.setdefault(plan_key, []).append(pos_id)
+    rebate = {key: ZERO for key in lines}
+    for plan, keys in members("project_bonus", authorities.bonus).items():
+        eligible = sum((goods[key] for key in keys), ZERO)
+        credit = ZERO
+        for band in authorities.bonus[plan]:
+            top = eligible if band.upper is None else min(eligible, band.upper)
+            if top > band.lower:
+                credit += (top - band.lower) * band.percent / HUNDRED
+        shares = allocate_cents(int(round_cents(credit) * 100), {key: goods[key] for key in keys})
+        for key, share in shares.items():
+            rebate[key] += share
 
-    for plan_key, member_positions in plans_to_positions.items():
-        bands = mail_rules.bonus_plans[plan_key]
-        line_goods_eur = {
-            pos_id: round_cents(Decimal(final_quantities[pos_id]) * base_unit_prices[pos_id])
-            for pos_id in member_positions
-        }
-        eligible_total_eur = sum(line_goods_eur.values(), ZERO)
-        raw_bonus_eur = ZERO
-        for band in bands:
-            if eligible_total_eur > band.lower_eur:
-                upper = eligible_total_eur if band.upper_eur is None else min(eligible_total_eur, band.upper_eur)
-                portion = max(ZERO, upper - band.lower_eur)
-                raw_bonus_eur += portion * (band.rate_percent / HUNDRED)
-        total_bonus_eur = round_cents(raw_bonus_eur)
-        total_bonus_cents = int(round_cents(total_bonus_eur * HUNDRED))
-        # Proportional to line goods values in cents
-        weights_cents = {
-            pos_id: Decimal(int(round_cents(val * HUNDRED)))
-            for pos_id, val in line_goods_eur.items()
-        }
-        alloc = allocate_cents_largest_remainder(total_bonus_cents, weights_cents)
-        for pos_id, amt in alloc.items():
-            allocated_bonus_eur[pos_id] += amt
+    demand: dict[str, int] = {}
+    for line in lines.values():
+        demand[line.material_number] = demand.get(line.material_number, 0) + line.quantity
 
-    # 10. Pooled material demand for shared stock & delivery commitments
-    pooled_material_demand: dict[str, int] = {}
-    for p in positions:
-        mat_no = matched_materials[p.position].material_number
-        pooled_material_demand[mat_no] = pooled_material_demand.get(mat_no, 0) + final_quantities[p.position]
+    for key, line in lines.items():
+        material, quantity, keys = line.material, Decimal(line.quantity), assigned.get(key, {})
+        unassigned = [kind for kind in ("packaging_tariff", "setup_pool", "project_bonus", "delivery_commitment",
+                                        "condition_group") if keys.get(kind) and keys[kind] not in
+                      {"packaging_tariff": authorities.tariffs, "setup_pool": authorities.pools,
+                       "project_bonus": authorities.bonus, "delivery_commitment": authorities.commitments,
+                       "condition_group": authorities.clauses}[kind]]
+        line.gaps.extend(f"{kind} {keys[kind]}" for kind in unassigned)
 
-    # 11. Per-position breakdown, final unit price, and lead time
-    calculated_positions: list[CalculatedPosition] = []
-    for p in sorted(positions, key=lambda x: x.position):
-        pos_id = p.position
-        mat = matched_materials[pos_id]
-        qty = final_quantities[pos_id]
-        qty_dec = Decimal(qty)
-        base_eur = base_unit_prices[pos_id]
-
-        # Mass surcharge per unit (unrounded) = (surcharge_mass_g / 1000) * metal_index_rate
-        metal_rate = ZERO
-        if mat.price_index_key and mat.price_index_key in mail_rules.metal_indices:
-            metal_rate = mail_rules.metal_indices[mat.price_index_key]
-        elif mail_rules.metal_indices:
-            metal_rate = next(iter(mail_rules.metal_indices.values()))
-        mass_surcharge_unrounded = (mat.surcharge_mass_g / THOUSAND) * metal_rate
-
-        # Ordinary setup + allocated shared setup
-        ordinary_setup_eur = pos_ordinary_setup.get(pos_id, ZERO)
-        pool_setup_eur = allocated_pool_setup_eur.get(pos_id, ZERO)
-        total_setup_eur = ordinary_setup_eur + pool_setup_eur
-
-        # Reported surcharge_per_unit BEFORE discount (excluding packaging and bonus)
-        surcharge_per_unit = round_cents(mass_surcharge_unrounded + (total_setup_eur / qty_dec))
-
-        # Packaging cost
-        pack_key = pos_pack_key.get(pos_id)
-        tariff_eur = ZERO
-        if pack_key and pack_key in mail_rules.packaging_tariffs:
-            tariff_eur = mail_rules.packaging_tariffs[pack_key]
-        cartons = math.ceil(qty / max(1, mat.pack_size))
-        carton_cost_eur = Decimal(cartons) * tariff_eur
-        packaging_per_unit = round_cents(carton_cost_eur / qty_dec)
-
-        # Project bonus for the entire position
-        rebate_total = round_cents(allocated_bonus_eur.get(pos_id, ZERO))
-
-        # Commercial clause for discount application
-        cond_key = pos_cond_group.get(pos_id)
-        clause_mode = "base_only"
-        if cond_key and cond_key in mail_rules.condition_clauses:
-            clause_mode = mail_rules.condition_clauses[cond_key]
-
-        discount_factor = (HUNDRED - approved_discount_pct) / HUNDRED
-        if clause_mode == "neither":
-            disc_base = base_eur
-            disc_mass = mass_surcharge_unrounded
-        elif clause_mode == "base_and_surcharge":
-            disc_base = base_eur * discount_factor
-            disc_mass = mass_surcharge_unrounded * discount_factor
-        else:  # "base_only"
-            disc_base = base_eur * discount_factor
-            disc_mass = mass_surcharge_unrounded
-
-        # Final unit price from unrounded per-piece components, rounded HALF_UP once at the end
-        unrounded_unit_price = (
-            disc_base
-            + disc_mass
-            + (ordinary_setup_eur + pool_setup_eur + carton_cost_eur - rebate_total) / qty_dec
-        )
-        unit_price = round_cents(unrounded_unit_price)
-
-        # Delivery lead time: check commitment first, else shared stock
-        pooled_demand = pooled_material_demand[mat.material_number]
-        lead_weeks: int | None = None
-        deliv_key = pos_deliv_key.get(pos_id)
-        if deliv_key and deliv_key in mail_rules.delivery_commitments:
-            comm = mail_rules.delivery_commitments[deliv_key]
-            if comm.material_number == mat.material_number and pooled_demand <= comm.max_pooled_qty:
-                lead_weeks = comm.lead_weeks
-        if lead_weeks is None:
-            if mat.free_stock >= pooled_demand:
-                lead_weeks = mat.stock_lead_weeks
+        surcharge = ZERO  # the mass surcharge per piece, unrounded
+        if material.index_code:
+            rate = authorities.index_rates.get(material.index_code)
+            if rate is None or material.surcharge_mass_g is None:
+                line.gaps.append(f"metal index {material.index_code}")
             else:
-                lead_weeks = mat.prod_lead_weeks
+                surcharge = material.surcharge_mass_g * rate
+        setup = setup_fees.get(key, ZERO) + pool_share[key]
 
-        cert_val = "Keine" if normalize_cert(mat.certification) == "keine" else mat.certification.strip()
-        calculated_positions.append(
-            CalculatedPosition(
-                position=pos_id,
-                material_number=mat.material_number,
-                quantity=qty,
-                unit_price=unit_price,
-                lead_time_weeks=lead_weeks,
-                base_unit_price=base_eur,
-                surcharge_per_unit=surcharge_per_unit,
-                packaging_per_unit=packaging_per_unit,
-                rebate_total=rebate_total,
-                bore_mm=mat.bore_mm,
-                stroke_mm=mat.stroke_mm,
-                mounting=mat.mounting.strip(),
-                certification=cert_val,
-            )
-        )
+        cartons = ZERO
+        if keys.get("packaging_tariff") in authorities.tariffs:
+            if material.carton_size:
+                cartons = Decimal(math.ceil(line.quantity / material.carton_size)) * authorities.tariffs[keys["packaging_tariff"]]
+            else:
+                line.gaps.append("carton size")
 
-    total_net = round_cents(
-        sum(Decimal(cp.quantity) * cp.unit_price for cp in calculated_positions)
-    )
+        clause = authorities.clauses.get(keys.get("condition_group") or "", "base_only")
+        base = line.base_unit_price * (factor if clause in ("base_only", "base_and_surcharge") else 1)
+        mass = surcharge * (factor if clause == "base_and_surcharge" else 1)
+        line.unit_price = round_cents(base + mass + (setup + cartons - rebate[key]) / quantity)
 
-    return BidCalculationResult(
-        tender_reference=tender_reference,
-        decision="bid",
-        currency="EUR",
-        discount_percent=approved_discount_pct,
-        positions=calculated_positions,
-        total_net=total_net,
-    )
+        blocked = " ".join(line.gaps)
+        line.surcharge_per_unit = None if "metal index" in blocked or "setup_pool" in blocked or "allocation mass" in blocked \
+            else round_cents(surcharge + setup / quantity)
+        line.packaging_per_unit = None if "packaging_tariff" in blocked or "carton size" in blocked \
+            else round_cents(cartons / quantity)
+        line.rebate_total = None if "project_bonus" in blocked else round_cents(rebate[key])
 
+        pooled = demand[line.material_number]
+        commitment = authorities.commitments.get(keys.get("delivery_commitment") or "")
+        if commitment and same_text(commitment.material, line.material_number) and (
+                commitment.max_quantity is None or pooled <= commitment.max_quantity):
+            line.lead_time_weeks = commitment.weeks
+        elif material.stock is not None and material.stock >= pooled and material.stock_lead_weeks is not None:
+            line.lead_time_weeks = material.stock_lead_weeks
+        else:
+            line.lead_time_weeks = material.production_lead_weeks
+            if material.stock is None:
+                line.gaps.append("stock")
+        if line.lead_time_weeks is None:
+            line.lead_time_weeks = material.stock_lead_weeks or 0
+            line.gaps.append("lead time")
+        if line.gaps:
+            notes.append(f"position {key}: unresolved {', '.join(line.gaps)}")
 
-compute_bid = calculate_bid
-
+    ordered = [lines[key] for key in sorted(lines)]
+    total = round_cents(sum((Decimal(line.quantity) * line.unit_price for line in ordered), ZERO))
+    return Bid(tender_reference, "bid", discount, ordered, total, omitted=sorted(set(omitted)), notes=notes)
