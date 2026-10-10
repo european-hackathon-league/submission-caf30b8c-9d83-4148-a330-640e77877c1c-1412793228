@@ -31,6 +31,19 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 10 | **Speed: stuck investigators** (100 run 74b22ceb took 19.3 of 20 min) | The tender-portal agent opened the same unchanged page 122× (~8 min); the investigation waits for every agent, so it ran to its time limit. Without the loop it would have ended around min 4-5 | 🟨 Maria, branch `maria/erp-loop-fixes` 76db483: a stuck investigator is sent idle (6 identical rounds, or circling after 2 hints) and woken by news; 296 tests OK; needs a sandbox run |
 | 9 | Work on branches, not main | Pushing to main got in the way of the other builders | Everyone; merge to main only when agreed |
 
+## Overfitting check: will it work on the private dataset? (11 Oct, unit tests only)
+
+Every sandbox run (35) and the golden file are the public scenario, and the brief says the private dataset has
+other websites, software, site names and content. "Golden check exact" only proves we did not break the public
+case. What was checked on branch `maria/erp-loop-fixes` (not merged):
+
+| Check | Result |
+|---|---|
+| Calculator rules on invented data | 148 rule-by-rule tests + a whole invented tender priced by hand, every field (`test_invented_tender.py`): **all match**. Low overfitting risk in pricing |
+| Public names in the package | Only v1's question routing keyed on the site names "erp"/"mail". **Fixed (b9dddbb):** routing now uses the roles the model reads from the brief, names only as fallback; test with invented site names |
+| Document formats (`test_document_formats.py`, invented files) | **5 of 7 failed:** XLSX rows lost, Office internals in the text, DOCX table cells run together, Windows-1252 CSV umlauts broken, file 3 archives deep not read. **Fixed (9c3081a)**, 7/7 pass |
+| Still open | Scanned (image-only) PDFs: no OCR. Prompts and hints were written from public-scenario failures (no public values in them) |
+
 ## Where the cost goes (keep in mind for every change)
 
 Measured on the branch's 100 run 2b8b5ca8 ($0.31): **199 calls sent 2.48 M input tokens, about 12,400 per call,
