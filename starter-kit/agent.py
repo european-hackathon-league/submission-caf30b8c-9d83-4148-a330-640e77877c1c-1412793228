@@ -177,7 +177,9 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     agent = Agent(name, tab, system, briefing, extra={"keep": keep, "answer": answer}, deadline=deadline,
                   max_steps=int(os.environ.get("AGENT_MAX_STEPS", "150")), idle=team.hook(name),
                   think=os.environ.get("AGENT_THINK") == "1",
-                  circle_hint="You are going in circles: the same thought keeps coming back without progress. If the "
+                  circle_hint="You are going in circles: the same thought keeps coming back without progress. If a "
+                              "link or control does nothing, do not click it again: open its address directly with "
+                              "goto, or use the search form on the page. If the "
                               "page in front of you is a candidate record, file it with keep now, also when it seems "
                               "not to match: the case file does the matching, and requirement values can still change "
                               "when amendments or reserves are filed. If you need facts the other agents have not "
