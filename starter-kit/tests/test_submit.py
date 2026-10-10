@@ -33,16 +33,17 @@ def a_bid(**changes) -> Bid:
 class FakeTab:
     """As much of a Tab as the agent loop touches; it records the actions it was given."""
 
-    def __init__(self, site_id: str):
+    def __init__(self, site_id: str, view: str | None = None):
         self.site_id, self.base_url = site_id, f"http://{site_id}.test"
         self.page = SimpleNamespace(url=self.base_url + "/start", main_frame=self)
         self.document, self.document_source, self.done = "", "", []
+        self.view = view or f"url: {self.page.url}\ntitle: {self.site_id}\n[1] button \"go\""
 
     async def evaluate(self, script):
         return True
 
     async def observe(self) -> str:
-        return f"url: {self.page.url}\ntitle: {self.site_id}\n[1] button \"go\""
+        return self.view
 
     def take_events(self) -> list[str]:
         return []
@@ -54,6 +55,10 @@ class FakeTab:
     async def fill(self, aid, text, enter=False) -> str:
         self.done.append(("fill", aid, text))
         return f"filled [{aid}]"
+
+    async def login(self) -> str:
+        self.done.append(("login",))
+        return "logged in"
 
 
 class Script:
@@ -170,6 +175,67 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         script = Script(submit=[done(answer="R-1")])
         result, tender = await self.run_with(script, seconds=-1)
         self.assertEqual((script.asked, tender.done, result["submitted"]), ([], [], False))
+
+    async def test_final_confirmation_requires_a_clean_live_checklist(self):
+        script = Script(submit=[{"thought": "", "actions": [{"do": "check_submission"}, {"do": "finalize", "id": 1}]},
+                                done(answer="R-1")])
+        tender = FakeTab("tender", "Tender T-0001\nPosition 1\nTotal 500.00\n[1] button \"Submit\"")
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertIn(("click", 1), tender.done)
+        self.assertIn("PRE-SUBMISSION CHECKLIST: READY", script.turns("submit")[1]["user"])
+        self.assertTrue(result["submitted"])
+
+    async def test_final_confirmation_is_blocked_by_an_unfilled_required_control(self):
+        script = Script(submit=[{"thought": "", "actions": [{"do": "check_submission"}, {"do": "finalize", "id": 1}]},
+                                done(summary="needs correction")])
+        tender = FakeTab("tender", "Tender T-0001\nPosition 1\nTotal 500.00\n[1] input \"VAT ID\" value=\"\" (required)\n[2] button \"Submit\"")
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertEqual(tender.done, [])
+        self.assertIn("PRE-SUBMISSION CHECKLIST: BLOCKED", script.turns("submit")[1]["user"])
+        self.assertFalse(result["submitted"])
+
+    async def test_validation_error_can_be_corrected_then_rechecked_before_finalising(self):
+        class CorrectingTab(FakeTab):
+            async def fill(self, aid, text, enter=False):
+                self.view = "Tender T-0001\nPosition 1\nTotal 500.00\n[2] button \"Submit\""
+                return await super().fill(aid, text, enter)
+
+        script = Script(submit=[{"thought": "", "actions": [{"do": "check_submission"}]},
+                                {"thought": "", "actions": [{"do": "fill", "id": 1, "text": "XX000000001"},
+                                                             {"do": "check_submission"}, {"do": "finalize", "id": 2}]},
+                                done(answer="R-1")])
+        tender = CorrectingTab("tender", "Tender T-0001\nPosition 1\nTotal 500.00\n[1] input \"VAT ID\" value=\"\" (required)")
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertIn(("click", 2), tender.done)
+        self.assertIn("PRE-SUBMISSION CHECKLIST: BLOCKED", script.turns("submit")[1]["user"])
+        self.assertTrue(result["submitted"])
+
+    async def test_clerk_can_request_a_fresh_tan_after_a_delayed_mailbox_delivery(self):
+        ask = {"thought": "", "actions": [{"do": "ask_mail", "task": "a fresh signing code"}]}
+        script = Script(submit=[ask, ask, done(answer="R-1")],
+                        courier=[done(summary="the new message has not arrived"), done(answer="CODE-2")])
+        await self.run_with(script)
+        self.assertIn("found nothing", script.turns("submit")[1]["user"])
+        self.assertIn('answers: "CODE-2"', script.turns("submit")[2]["user"])
+
+    async def test_clerk_recovers_from_an_interrupted_session_before_review(self):
+        class RestoringTab(FakeTab):
+            async def login(self):
+                self.view = 'Tender T-0001\nPosition 1\nTotal 500.00\n[2] button "Submit"'
+                return await super().login()
+
+        script = Script(submit=[{"thought": "", "actions": [{"do": "login"}]},
+                                {"thought": "", "actions": [{"do": "check_submission"}, {"do": "finalize", "id": 2}]},
+                                done(answer="R-1")])
+        tender = RestoringTab("tender", 'Your session has expired\n[1] button "Log in again"')
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertIn(("login",), tender.done)
+        self.assertIn(("click", 2), tender.done)
+        self.assertTrue(result["submitted"])
 
 
 if __name__ == "__main__":

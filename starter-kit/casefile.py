@@ -152,6 +152,7 @@ class CaseFile:
         self.materials: dict[str, dict] = {}
         self.conditions: dict[str, dict[tuple, dict]] = {}
         self.messages: dict[tuple, dict] = {}
+        self.evidence: list[dict] = []  # extracted records, retained with the page and agent that supplied them
         self.answers: dict[str, tuple[str, str]] = {}  # question id -> (complete | absent, note)
         self.filed: set[str] = set()
         self.news: dict[str, list[str]] = {}
@@ -222,6 +223,9 @@ class CaseFile:
                                        think=True, max_tokens=8000, label=f"extract:{kind}",
                                        provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
             summary = self.merge(kind, data) if data else "the extraction failed; file the document again"
+            if data:
+                self.evidence.append({"id": digest, "kind": kind, "source": source, "agent": agent,
+                                      "summary": summary, "extracted": data})
             print(f"[extract {kind}] {source} -> {json.dumps(data, ensure_ascii=False)[:1800]}", flush=True)
         except Exception as error:  # noqa: BLE001
             data = None
@@ -600,7 +604,8 @@ class CaseFile:
                            "requirements": {f"{rev}|{ref}": row for (rev, ref), row in self.requirements.items()},
                            "materials": self.materials,
                            "conditions": {key: list(rows.values()) for key, rows in self.conditions.items()},
-                           "messages": list(self.messages.values()), "answers": self.answers, "mailbox": self.mailbox},
+                           "messages": list(self.messages.values()), "answers": self.answers, "mailbox": self.mailbox,
+                           "evidence": self.evidence},
                           ensure_ascii=False, default=str)
 
 

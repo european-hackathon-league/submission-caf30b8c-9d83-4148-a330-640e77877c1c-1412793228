@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from browser_env import Tab
 from calculator import Bid
+from preflight import Report, check as check_review
 from worker import ACTIONS_HELP, Agent
 
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
@@ -57,6 +58,12 @@ One more action:
       get the signing code (TAN) the portal sends by mail. Ask only after you have triggered the code in the
       portal, and pass on what you know about it (the tender reference, that you requested it just now, anything
       the portal displayed about it): the mailbox also holds older codes that no longer work.
+  {{"do": "check_submission"}}
+      Read the current review page and produce a no-model checklist of visible errors, unfilled required controls,
+      tender reference, offered positions and total. Run this immediately before the irreversible final step.
+  {{"do": "finalize", "id": 12}}
+      Press the final submit/confirm control only after check_submission reported READY. Never use ordinary click for
+      the irreversible final submit control.
 
 How to work
 - Start from the page you are on and find the bid form of tender {reference}. Log in again if the portal asks.
@@ -73,6 +80,8 @@ How to work
   discount and the total. Go back and correct differences while there is time.
 - Signing: trigger the code in the portal, get it with ask_mail, enter it and submit. A submission is final.
   If the portal rejects a code, request a fresh one instead of trying the same again.
+- On the final review page, call check_submission. If it is BLOCKED, correct the reported issue and check again.
+  Use finalize for the final irreversible confirmation only after it reports READY.
 - You are finished only when the portal confirms that the bid was received. Then finish with done and put the
   confirmation (its receipt number or code, else its wording) in "answer". If you cannot submit, finish with
   done without "answer" and say why in "summary".
@@ -133,6 +142,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     """
     reference = str(context.get("tender_reference") or bid.tender_reference)
     codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
+    review: Report | None = None
 
     async def ask_mail(action: dict) -> str:
         task = str(action.get("task") or "").strip()
@@ -159,6 +169,19 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         codes.append(answer)
         return f'the mailbox colleague answers: "{answer}"' + (f' ({outcome["summary"]})' if outcome.get("summary") else "")
 
+    async def check_submission(action: dict) -> str:
+        nonlocal review
+        review = check_review(await tender_tab.observe(), bid, reference)
+        return review.text()
+
+    async def finalize(action: dict) -> str:
+        nonlocal review
+        # Navigation, expiry and server validation can invalidate an earlier review, so inspect it again.
+        review = check_review(await tender_tab.observe(), bid, reference)
+        if not review.ready:
+            return review.text() + "\nFinal submission was not pressed."
+        return await tender_tab.click(action.get("id"))
+
     def heading() -> str:
         left = int(deadline - time.time())
         text = f"YOUR JOB: enter, sign and submit the bid for tender {reference}, then read the confirmation."
@@ -173,7 +196,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
                           sheet=json.dumps(bid_sheet(bid), ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
-    clerk = Agent("submit", tender_tab, system, heading, extra={"ask_mail": ask_mail}, deadline=deadline,
+    clerk = Agent("submit", tender_tab, system, heading,
+                  extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize}, deadline=deadline,
                   max_steps=CLERK_STEPS, think=CLERK_THINKS)
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()

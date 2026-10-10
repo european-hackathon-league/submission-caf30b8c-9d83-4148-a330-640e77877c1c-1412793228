@@ -31,14 +31,17 @@ task brief ──► model reads it: tender, scenario date, authorized senders
    evidence. Nothing in the code knows a URL, a selector or a click path of any website.
 3. **File facts.** `keep` hands the page to a second model call that extracts typed records (positions, Q&A
    answers, revisions, requirements, materials, price conditions, mail records). `casefile.CaseFile` merges them
-   and derives what is still unknown: a catalogue group found in the specification becomes an ERP question, a key
+   and derives what is still unknown. Each successful extraction retains its source URL, site agent, document ID,
+   normalized result, and merge summary in the case-file dump, so later agents can assess contradictory evidence.
+   A catalogue group found in the specification becomes an ERP question, a key
    in a Q&A answer becomes a mailbox question, and so on. Agents finish when their website has nothing left to add.
 4. **Calculate.** `calculator.calculate_bid` applies the bid rules of the brief: latest clarification, withdrawn
    answers, scoped amendments, usable travel, sets to pieces, price scales, FX, conditional discount, condition
    clauses, shared stock, delivery commitments, cartons, pooled setup, project bonus, rounding. A position that
    lacks evidence is left out rather than guessed.
 5. **Submit.** `submit.submit_bid` gives the bid to an agent on the tender portal, which fills whatever bid form
-   it finds, asks a mail agent for the signing TAN and confirms the receipt.
+   it finds, asks a mail agent for the signing TAN, and runs a fresh live-page pre-submit report immediately before
+   the irreversible confirmation. Explicit portal errors and empty required controls block that confirmation.
 
 ## What is model and what is code
 
@@ -60,9 +63,10 @@ No scenario value (reference, material, price, key, login, TAN) appears anywhere
 | `agent.py` | Entry point: reads the run, starts the site agents, calculates, hands the bid to the submission agent |
 | `worker.py` | The agent loop: page text in, the model's actions out |
 | `browser_env.py` | A tab as accessible text (labels, descriptions, tooltips, frames, collapsed sections) and the actions on it |
-| `casefile.py` | Evidence to typed facts, open questions, calculator inputs |
+| `casefile.py` | Evidence to typed facts with source provenance, open questions, calculator inputs |
 | `calculator.py` | The bid rules as Decimal arithmetic |
 | `submit.py` | Bid entry and signing |
+| `preflight.py` | Non-model live review-page report that gates final confirmation on explicit errors or required inputs |
 | `llm.py` | The hosted Qwen through the run's metering proxy: JSON replies, retries, a concurrency cap |
 | `run.py`, `browsers.py`, `models.py` | The starter kit's plumbing: the run contract, the run's browsers, the hosted models |
 | `agent.json` | Setup (`uv sync`), run command, four browsers, the hosted `qwen` |
