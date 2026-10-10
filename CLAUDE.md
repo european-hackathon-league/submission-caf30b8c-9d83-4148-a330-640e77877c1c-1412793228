@@ -44,10 +44,12 @@
 
 ## 2. Optional Claude Code MCP Integrations
 
-If running inside Claude Code, you can also attach Entire's live documentation MCP server or Brain MCP server:
+If running inside Claude Code, you can also attach Entire's live documentation MCP server, Brain MCP server, and the Atira Challenge MCP server:
 ```bash
 claude mcp add --transport http entire-docs https://docs.entire.io/mcp
+claude mcp add atira -- atira mcp
 ```
+See `AGENTS.md` for the full **Atira: From RFQ to Bid (`rfq`)** challenge rules and fair-play constraints.
 
 
 

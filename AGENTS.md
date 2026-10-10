@@ -75,6 +75,20 @@ entire runner setup -y
 entire doctor
 ```
 
+---
+
+## 3. Chosen Challenge: Atira — "From RFQ to Bid" (`rfq`)
+
+- **Challenge Platform:** `https://ehl-challenge.atira.ai/` (`llms.txt`: `https://ehl-challenge.atira.ai/llms.txt`)
+- **Atira CLI Path (Windows):** `C:\Users\vamsh\AppData\Local\atira\bin\atira.cmd` (or `atira`)
+- **Starter Kit & Agent Package Directory:** `starter-kit/`
+- **MCP Server Command:** `atira mcp` (`claude mcp add atira -- atira mcp` / `codex mcp add atira -- atira mcp`)
+- **Core Fair-Play Rules (`https://ehl-challenge.atira.ai/docs/fair-play.md`):**
+  - **NEVER hardcode scenario values** from the public dataset (`VG-2027-7093`, material numbers, prices, discounts, quantities, TANs) into code, prompts, or fallbacks. Every package is inspected by an AI reviewer before running.
+  - **Must be genuinely agentic:** An LLM (`Qwen3.8-Flash-Next` / `Cloudflare Clef` or frontier model via proxy) must decide navigation targets, searches, and document selections at runtime. Deterministic Python helpers are allowed and encouraged for DOM extraction of selected pages, pagination, and exact `Decimal` (`ROUND_HALF_UP`) commercial calculations.
+  - **At most 4 browsers** via `CDP_URLS` (`"browsers": 4` in `agent.json`). Never launch extra browser processes in the sandbox.
+  - **Ranking Order:** `Eligible first -> Quality (0..100) ↓ -> Cost × Time ↑`, evaluated primarily on the **Private Dataset** (same 29 bid rules & answer schema, different website software/layouts/data).
+
 
 
 <!-- entire-agent:begin -->
