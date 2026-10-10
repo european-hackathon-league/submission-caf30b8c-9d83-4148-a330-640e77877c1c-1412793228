@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 18:30.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 19:20.
 
 ## Owners
 
@@ -25,6 +25,26 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 5 | Reliability: one sandbox run at a time; repeat the same commit to measure variance | 70.7 vs 29.1 on the same code | Maria (coordination) |
 | 6 | Calculator latent bugs, edge-case tests, leakage lint, fair-play checklist | Private-dataset safety, review safety | Vamshidhar |
 | 7 | Pitch, cut-off time | | Iga, Ravindra |
+
+## Score log (every sandbox run, newest first)
+
+Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official quality (0-100).
+
+| Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
+|---|---|---|---|---|---|---|---|---|
+| 17:04 | run_60233f96 | Vamshidhar | pkg e074e9e5 | running | | | | |
+| 16:58 | run_23a00fcc | Vamshidhar | pkg 8f871985 | running | | | | |
+| 16:26 | run_bde0fc31 | Vamshidhar | pkg ba54f05a | 27.8 | ✅ | 13.7 min | 316 / $0.58 | Only 01.05 priced |
+| 15:55 | run_9c8fe292 | Vamshidhar | main 024f8b3 | 29.1 | ✅ | 13.9 min | 232 / $0.37 | Only 01.05 priced; whole setup pool on it (fixed in d1db536) |
+| 15:55 | run_3c3568bb | Vamshidhar | main 024f8b3 | **70.7** | ✅ | 18.4 min | 278 / $0.38 | Same answer as run_8184b178 |
+| 15:49 | run_8184b178 | Maria | main 030ccbc | **70.7** | ✅ | 16.6 min | 293 / $0.43 | 01.02, 01.04, 01.05 perfect; 01.03 lead time; 01.01 omitted ("set size unknown") |
+| 15:31 | run_d38deaff | Vamshidhar | codex/robustness-validation | 10 | ✅ | 17.5 min | 436 / $0.61 | Supplier + ERP agents unfinished, empty bid |
+| 15:20 | run_6da03229 | Maria | main 9106ce3 | 10 | ✅ | 13.4 min | 218 / $0.27 | First signed bid; tender tab broken, empty bid |
+| 14:52 | run_54c78c38 | Maria | main aff64a9 | 0 | ❌ | 23 min | 355 / $0.55 | Never signed (courier on broken tab, investigation too long) |
+| 14:31 | run_78004a51 | Maria | 7e7096b | – | ❌ | cancelled | 141 / $0.18 | Tender agent hung, run frozen |
+| 12:20 | run_f06e3fcf | Vamshidhar | 37a4414 (script) | 100 | ✅ | 16 s | 0 / $0 | Fixed script, no model calls: **not submittable** (fair play) |
+
+Leaderboard leader for comparison: 21.5 (13:00 and 14:34 UTC).
 
 ## Success levels
 
