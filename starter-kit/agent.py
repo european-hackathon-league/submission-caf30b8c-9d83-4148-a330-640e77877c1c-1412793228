@@ -70,6 +70,9 @@ How to work
   previews, blocked materials, future-dated records, values in the wrong unit or number format. Check dates,
   references, senders and status marks before you rely on a record, and follow the brief's rules on which one
   counts. When in doubt, file both and let the facts decide.
+- Do not reject a candidate record yourself (for example a material whose stroke seems to differ): file every
+  candidate the question names with keep. The case file matches them against the requirement values, which can still
+  change when amendments or reserves are filed.
 - Follow the search hints a website gives. If a search returns nothing or too much, change the search terms.
 - When a question asks for every item in a list, inspect its page controls and use collect on the control that
   advances that list before filing it. Check the resulting page count or end state; do not mark a list complete after
@@ -160,7 +163,12 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     # extraction calls in casefile.py, which keep thinking on. AGENT_THINK=1 turns it back on for comparison.
     agent = Agent(name, tab, system, briefing, extra={"keep": keep, "answer": answer}, deadline=deadline,
                   max_steps=int(os.environ.get("AGENT_MAX_STEPS", "150")), idle=team.hook(name),
-                  think=os.environ.get("AGENT_THINK") == "1")
+                  think=os.environ.get("AGENT_THINK") == "1",
+                  circle_hint="You are going in circles: the same thought keeps coming back without progress. If the "
+                              "page in front of you is a candidate record, file it with keep now, also when it seems "
+                              "not to match: the case file does the matching, and requirement values can still change "
+                              "when amendments or reserves are filed. If you need facts the other agents have not "
+                              "filed yet, finish with done; you are called again when the case file has news.")
     return agent
 
 

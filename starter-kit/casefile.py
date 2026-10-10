@@ -683,7 +683,8 @@ class CaseFile:
                 ask(f"material:{ref}", f"The ERP material for requirement {ref}: active, in catalogue group "
                                        f"{need.catalogue_group}, bore {need.bore_mm} mm, stroke {need.stroke_mm} mm, "
                                        f"{need.pressure_bar} bar, mounting {need.mounting}, certification "
-                                       f"{need.certification or 'none'}. File each candidate's technical data and status. "
+                                       f"{need.certification or 'none'}. File each candidate's technical data and status, "
+                                       "also a candidate that seems not to match: the case file does the matching. "
                                        f"On file for this group: {'; '.join(seen) or 'nothing yet'}. Answer absent only "
                                        "when every material of the group is on file and none matches.")
                 continue

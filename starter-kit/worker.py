@@ -74,7 +74,7 @@ class Agent:
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
                  max_steps: int = 80, think: bool = False,
                  idle: Callable[[str], Awaitable[str | None]] | None = None,
-                 guard: Callable[[dict], str | None] | None = None, finish_on_repeat: int | None = None):
+                 guard: Callable[[dict], str | None] | None = None, finish_on_repeat: int | None = None, circle_hint: str | None = None):
         """`briefing()` heads every turn. `extra` adds actions: name -> handler(action) -> result text.
         `idle("done")` lets the caller hold a finished agent until there is news for it (returns the news) or
         let it stop (returns None)."""
@@ -89,6 +89,11 @@ class Agent:
         self.finish_on_repeat = finish_on_repeat
         self._thoughts: list[str] = []
         self._circle_hinted = False
+        self._circle_hinted_at = -99
+        self.circle_hint = circle_hint or (
+            "You are going in circles: the same steps keep repeating without progress. The page may already show "
+            "what you need, including inside embedded documents: read it fully. Otherwise open the link's address "
+            "directly with goto, or try a different way. If you already have the answer, finish with done now.")
         self._circle_hint: str | None = None  # a sanity check that may veto a browser action before it runs (sanity.py)
         self.turns: list[dict] = []
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
@@ -200,18 +205,19 @@ class Agent:
             thought = str(reply.get("thought", ""))[:300]
             self._thoughts.append(" ".join(thought.lower().split())[:160])
             recent = self._thoughts
-            # Going in circles: the same thought three times (A A A), or two thoughts alternating (A B A B), as in the
-            # courier stress test where "unlock the list" and "open the newest message" alternated for 19 turns.
-            circling = bool(self.finish_on_repeat) and (
+            # Going in circles: the same thought three times (A A A), two thoughts alternating (A B A B), as in the
+            # courier stress test where "unlock the list" and "open the newest message" alternated for 19 turns, or
+            # the same thought three times within the last 16 turns, as in sandbox run e3804980 where the ERP agent
+            # rejected the same material every 6 turns for 46 turns.
+            circling = (
                 (len(recent) >= 3 and len(set(recent[-3:])) == 1)
-                or (len(recent) >= 4 and recent[-1] == recent[-3] and recent[-2] == recent[-4] and recent[-1] != recent[-2]))
-            if circling and not self._circle_hinted:
-                self._circle_hinted = True
-                circling = False  # first time: a concrete way out, not yet the forced finish
-                self._circle_hint = ("You are going in circles: the same steps keep repeating without progress. The "
-                                     "page may already show what you need, including inside embedded documents: read "
-                                     "it fully. Otherwise open the link's address directly with goto, or try a "
-                                     "different way. If you already have the answer, finish with done now.")
+                or (len(recent) >= 4 and recent[-1] == recent[-3] and recent[-2] == recent[-4] and recent[-1] != recent[-2])
+                or recent[-16:].count(recent[-1]) >= 3)
+            if circling and (not self.finish_on_repeat or not self._circle_hinted):
+                circling = False  # a concrete way out first; only an agent with finish_on_repeat is then forced to finish
+                if len(recent) - self._circle_hinted_at >= 6:  # once every 6 turns at most
+                    self._circle_hinted, self._circle_hinted_at = True, len(recent)
+                    self._circle_hint = self.circle_hint
             if circling:
                 final = await llm.chat_json(self._messages(
                     user + "\n\nYou have reached the same conclusion several times in a row. Stop checking and finish "

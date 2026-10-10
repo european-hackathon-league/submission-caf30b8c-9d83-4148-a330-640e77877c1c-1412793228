@@ -252,3 +252,29 @@ class TokenCutOffAndTeamWakeup(unittest.IsolatedAsyncioTestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class CircleDetection(unittest.IsolatedAsyncioTestCase):
+    """Sandbox run e3804980: the ERP agent rejected the same material every 6 turns for 46 turns, which neither the
+    back-to-back nor the alternating repeat check caught."""
+
+    async def run_cycle(self, **options):
+        cycle = ["search the group", "open the first hit", "read the stroke", "go back", "open it again",
+                 "this material has the wrong stroke"]
+        replies = [{"thought": cycle[i % 6], "actions": [{"do": "fill", "id": 1, "text": str(i)}]} for i in range(20)]
+        replies.append({"thought": "stop", "actions": [{"do": "done", "summary": "stopped"}]})
+        asked = []
+
+        async def model(messages, **kwargs):
+            asked.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("test", FakeTab(True), "system", lambda: "job", max_steps=30, **options).run()
+        return outcome, asked
+
+    async def test_thought_repeated_three_times_in_twelve_turns_gets_the_agents_own_hint(self):
+        outcome, asked = await self.run_cycle(circle_hint="file the candidate with keep")
+        hinted = [i for i, text in enumerate(asked) if "file the candidate with keep" in text]
+        self.assertEqual(hinted, [13, 19])  # third pass of the cycle, then again at most every 6 turns
+        self.assertTrue(outcome["done"])  # an investigator is hinted, never forced to finish
