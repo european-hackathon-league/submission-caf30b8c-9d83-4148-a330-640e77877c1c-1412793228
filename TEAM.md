@@ -55,6 +55,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| ~20:30 | run_2b8b5ca8 | Maria | branch `maria/erp-loop-fixes` **5ee465a**: all fixes + v1's routing + goto hint for dead links, main's calculator | running | | | | Rerun of the candidate for main (c3c4b1e8 was lost to the portal outage). Runs alongside submission 3 and 2 of Vamshidhar's runs |
 | 20:23 | run_64e3f0cf | Vamshidhar | ? | running | | | | |
 | 20:03 | run_c3c4b1e8 | Maria | branch `maria/erp-loop-fixes` **c5a1733**: all fixes + v1's routing, main's calculator | **0 (failed, no answer)** | ❌ | 17.4 min | 95 / $0.11 | **The tender portal was unreachable inside the sandbox for the whole run** (every load hit the 45 s timeout, reloads aborted, fresh tabs too), so no positions and the clerk cannot reach the form. Not the agent logic: 0 model failures, no loops, investigation ended by itself at 622 s. Same portal hang as submission 2. The portals answer normally from outside. **Not a test of the fixes: rerun needed** |
 | 20:11 | **sub_97fb152d (SUBMISSION 3)** | Maria | **v1** exactly as it scored 100 in 9.6 min (44a626ef) | review passed ✅, scored run in progress | | | | Becomes the final package once the review passes (the final uses the latest submission that passed review) |
