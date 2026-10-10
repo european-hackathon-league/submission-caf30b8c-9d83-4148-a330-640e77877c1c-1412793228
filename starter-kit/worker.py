@@ -36,7 +36,11 @@ Reading the page:
 - It is rendered as a screen reader would read it. "(described: ...)" and "(tooltip: ...)" hold text that only
   shows on hover, "[canvas: ...]" what a drawing says, "(in collapsed menu)" an entry of a menu that is closed
   (you can click it all the same), "->" where a link leads, "{data-...}" attributes of a control.
-- A "LOCKED AREA" is disabled until you pass the check in front of it.
+- A "LOCKED AREA" is disabled until you pass the check in front of it. A page can hold several checks, one per
+  area, also inside embedded frames further down: after passing one, look for the next LOCKED AREA and its own
+  controls. A check whose status already reads as unlocked is done; setting it again changes nothing.
+- A "toggle" opens or closes a section. If a section you opened stays empty after you unlocked it, click its toggle
+  twice (close, then open) to load it again.
 - Several controls can carry the same name while only one of them does the job: tell them apart by where they
   lead and what their attributes say.
 - Popups, cookie walls, access checks, error pages and expired sessions happen. Deal with them and carry on;
@@ -184,8 +188,9 @@ class Agent:
                     moved = True
             self.log(f"{thought} | {json.dumps(actions, ensure_ascii=False)[:400]} | " + " ; ".join(r[:160] for r in results))
             if repeats >= 2:
-                results.append("You have sent the same actions three times with the same result. Do something "
-                               "different, or finish with done.")
+                results.append("You have sent the same actions three times with the same result: they do not work "
+                               "here. Read the page again from the top for another way (a further check, a toggle, a "
+                               "different link, a search), or finish with done.")
             if finished is not None:
                 outcome.update(summary=str(finished.get("summary", "")), answer=finished.get("answer"))
                 news = await self.idle("done") if self.idle else None
