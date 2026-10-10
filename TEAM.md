@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 19:20.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 19:45.
 
 ## Owners
 
@@ -32,8 +32,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 17:04 | run_60233f96 | Vamshidhar | pkg e074e9e5 | running | | | | |
-| 16:58 | run_23a00fcc | Vamshidhar | pkg 8f871985 | running | | | | |
+| 17:16 | run_1d8b1f72 | Vamshidhar | pkg 3e4e22e7 | running | | | | |
+| **17:04** | **run_60233f96** | Vamshidhar | pkg e074e9e5 (started 1 min after 2d96c95: unit + free-stock fix) | **98.7** 🎉 | ✅ | **10.1 min** | 245 / $0.33 | All 5 positions priced; only 01.03 lead time wrong (11.7/13). Total, index check, withdrawn check ✅ |
+| 16:58 | run_23a00fcc | Vamshidhar | pkg 8f871985 | 22.8 | ✅ | 14.2 min | 229 / $0.38 | Only 01.01 partly priced (7.8); withdrawn check 0 |
 | 16:26 | run_bde0fc31 | Vamshidhar | pkg ba54f05a | 27.8 | ✅ | 13.7 min | 316 / $0.58 | Only 01.05 priced |
 | 15:55 | run_9c8fe292 | Vamshidhar | main 024f8b3 | 29.1 | ✅ | 13.9 min | 232 / $0.37 | Only 01.05 priced; whole setup pool on it (fixed in d1db536) |
 | 15:55 | run_3c3568bb | Vamshidhar | main 024f8b3 | **70.7** | ✅ | 18.4 min | 278 / $0.38 | Same answer as run_8184b178 |
@@ -45,6 +46,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | 12:20 | run_f06e3fcf | Vamshidhar | 37a4414 (script) | 100 | ✅ | 16 s | 0 / $0 | Fixed script, no model calls: **not submittable** (fair play) |
 
 Leaderboard leader for comparison: 21.5 (13:00 and 14:34 UTC).
+
+**Spread so far (model-directed agent):** 98.7 · 70.7 · 70.7 · 29.1 · 27.8 · 22.8 · 10 · 10. Best and median are far apart: reliability is the main lever.
 
 ## Success levels
 
