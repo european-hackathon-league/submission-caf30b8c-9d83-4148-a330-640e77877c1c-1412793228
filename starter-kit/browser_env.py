@@ -274,8 +274,81 @@ def without_ids(text: str) -> str:
     return re.sub(r"\[\d+\] (?=(?:\(in collapsed menu\) )?[a-z-]+(?:\([a-z]+\))? \")", "", text)
 
 
+def _xml_local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _xlsx_text(archive: zipfile.ZipFile) -> str:
+    """Every sheet of a workbook, one line per row, cells separated by " | " (text cells resolved from the
+    shared-strings table, where Excel keeps them apart from the rows)."""
+    import xml.etree.ElementTree as ET
+    names = set(archive.namelist())
+    shared: list[str] = []
+    if "xl/sharedStrings.xml" in names:
+        for item in ET.fromstring(archive.read("xl/sharedStrings.xml")):
+            shared.append("".join(node.text or "" for node in item.iter() if _xml_local(node.tag) == "t"))
+    sheets = sorted((n for n in names if n.startswith("xl/worksheets/") and n.endswith(".xml")),
+                    key=lambda n: int(re.sub(r"\D", "", n) or 0))
+    parts = []
+    for sheet in sheets:
+        rows = []
+        for row in ET.fromstring(archive.read(sheet)).iter():
+            if _xml_local(row.tag) != "row":
+                continue
+            cells = []
+            for cell in row:
+                if _xml_local(cell.tag) != "c":
+                    continue
+                value = next((n.text or "" for n in cell.iter() if _xml_local(n.tag) == "v"), None)
+                if cell.get("t") == "s" and value is not None and value.isdigit() and int(value) < len(shared):
+                    value = shared[int(value)]
+                elif cell.get("t") == "inlineStr":
+                    value = "".join(n.text or "" for n in cell.iter() if _xml_local(n.tag) == "t")
+                cells.append(value or "")
+            if any(cells):
+                rows.append(" | ".join(cells))
+        parts.append(f"=== SHEET {sheet.rsplit('/', 1)[-1]} ===\n" + "\n".join(rows))
+    return "\n".join(parts)
+
+
+def _docx_text(archive: zipfile.ZipFile) -> str:
+    """A Word document's paragraphs, one per line; a table row's cells on one line separated by " | "."""
+    import xml.etree.ElementTree as ET
+    body = ET.fromstring(archive.read("word/document.xml"))
+
+    def text_of(node) -> str:
+        return "".join(n.text or "" for n in node.iter() if _xml_local(n.tag) == "t")
+
+    lines = []
+    for node in body.iter():
+        tag = _xml_local(node.tag)
+        if tag == "tr":
+            lines.append(" | ".join(text_of(cell) for cell in node if _xml_local(cell.tag) == "tc"))
+        elif tag == "p" and not any(_xml_local(parent.tag) == "tc" for parent in _ancestors(body, node)):
+            lines.append(text_of(node))
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _ancestors(root, target) -> list:
+    parents = {child: parent for parent in root.iter() for child in parent}
+    found, node = [], target
+    while node in parents:
+        node = parents[node]
+        found.append(node)
+    return found
+
+
+def _decode(data: bytes) -> str:
+    """UTF-8, else Windows-1252 (what German Excel and many older systems write), so umlauts survive."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace")
+
+
 def document_text(data: bytes, content_type: str, name: str, depth: int = 0) -> str:
-    """The text of a fetched file: archives are opened, markup is stripped, PDFs are read when pypdf is installed."""
+    """The text of a fetched file: archives are opened, Word and Excel files are read as text and table rows, markup
+    is stripped, PDFs are read when pypdf is installed."""
     kind = (content_type or "").lower()
     lower = name.lower()
     if data[:4] == b"PK\x03\x04" or "zip" in kind or lower.endswith(".zip"):
@@ -283,9 +356,17 @@ def document_text(data: bytes, content_type: str, name: str, depth: int = 0) -> 
             archive = zipfile.ZipFile(io.BytesIO(data))
         except zipfile.BadZipFile:
             return "(unreadable archive)"
+        names = set(archive.namelist())
+        try:
+            if "xl/workbook.xml" in names:
+                return clean_text(f"SPREADSHEET {name}\n" + _xlsx_text(archive))
+            if "word/document.xml" in names:
+                return clean_text(f"DOCUMENT {name}\n" + _docx_text(archive))
+        except Exception:  # noqa: BLE001  (a damaged Office file: fall back to reading it as an archive)
+            pass
         parts = [f"ARCHIVE {name} with files: " + ", ".join(info.filename for info in archive.infolist())]
         for info in archive.infolist()[:40]:
-            if info.is_dir() or depth > 2:
+            if info.is_dir() or depth > 4:
                 continue
             parts.append(f"=== FILE {info.filename} ===\n" + document_text(archive.read(info), "", info.filename, depth + 1))
         return "\n".join(parts)
@@ -295,7 +376,7 @@ def document_text(data: bytes, content_type: str, name: str, depth: int = 0) -> 
             return clean_text("\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages))
         except Exception as error:  # noqa: BLE001
             return f"(PDF could not be read: {error})"
-    text = data.decode("utf-8", errors="replace")
+    text = _decode(data)
     if "html" in kind or "xml" in kind or re.search(r"<(html|body|table|div|p|w:document|worksheet)\b", text[:4000], re.I):
         parser = _Text()
         parser.feed(text)
