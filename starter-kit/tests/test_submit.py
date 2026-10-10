@@ -213,6 +213,52 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         self.assertIn("PRE-SUBMISSION CHECKLIST: BLOCKED", script.turns("submit")[1]["user"])
         self.assertTrue(result["submitted"])
 
+    async def test_final_step_waits_for_a_page_that_shows_the_bid(self):
+        class ReviewTab(FakeTab):
+            async def click(self, aid):
+                if aid == 5:  # the clerk opens the review step
+                    self.view = 'Tender T-0001\nPosition 1\nTotal 500.00\n[2] button "Submit"'
+                    return "clicked [5]"
+                return await super().click(aid)
+
+        finalize = {"thought": "", "actions": [{"do": "finalize", "id": 2}]}
+        script = Script(submit=[finalize, {"thought": "", "actions": [{"do": "click", "id": 5}]}, finalize,
+                                done(answer="R-1")])
+        tender = ReviewTab("tender", 'Signature\n[1] input "Code" value="X"\n[2] button "Submit"\n[5] link "Review"')
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        refused = script.turns("submit")[1]["user"]
+        self.assertIn("PRE-SUBMISSION CHECKLIST: BLOCKED", refused)
+        self.assertIn("NOT SHOWN: tender reference T-0001", refused)
+        self.assertIn("Final submission was not pressed", refused)
+        self.assertEqual(tender.done, [("click", 2)])  # pressed once, on the page that showed the bid
+        self.assertTrue(result["submitted"])
+
+    async def test_missing_review_evidence_never_leaves_a_bid_unsigned(self):
+        finalize = {"thought": "", "actions": [{"do": "finalize", "id": 2}]}
+        page = 'Signature\n[1] input "Code" value="X"\n[2] button "Submit"'
+        tender = FakeTab("tender", page)
+        script = Script(submit=[finalize] * (submit.UNPROVEN_REFUSALS + 1) + [done(answer="R-1")])
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertEqual(tender.done, [("click", 2)])  # held back twice, then pressed
+        self.assertTrue(result["submitted"])
+
+        tender = FakeTab("tender", page)  # with little time left it is pressed at once
+        script = Script(submit=[finalize, done(answer="R-1")])
+        with patch.object(llm, "chat_json", script):
+            await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + submit.WRAP_UP - 30)
+        self.assertEqual(tender.done, [("click", 2)])
+
+    async def test_a_visible_error_blocks_the_final_step_however_often_it_is_tried(self):
+        finalize = {"thought": "", "actions": [{"do": "finalize", "id": 2}]}
+        tender = FakeTab("tender", 'Tender T-0001\nPosition 1\nTotal 500.00\n(error) code rejected\n[2] button "Submit"')
+        script = Script(submit=[finalize] * (submit.UNPROVEN_REFUSALS + 3) + [done(summary="blocked")])
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertEqual(tender.done, [])
+        self.assertFalse(result["submitted"])
+
     async def test_clerk_can_request_a_fresh_tan_after_a_delayed_mailbox_delivery(self):
         ask = {"thought": "", "actions": [{"do": "ask_mail", "task": "a fresh signing code"}]}
         script = Script(submit=[ask, ask, done(answer="R-1")],

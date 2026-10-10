@@ -24,10 +24,35 @@ class ReviewPages(unittest.TestCase):
         self.assertFalse(report.ready)
         self.assertEqual(len(report.blockers), 2)
 
-    def test_absent_summary_values_warn_without_guessing_a_failure(self):
+    def test_a_page_that_does_not_show_the_bid_is_not_ready_but_reports_no_error(self):
         report = check('[9] button "Continue"', bid(), "T-0001")
-        self.assertTrue(report.ready)
-        self.assertGreaterEqual(len(report.warnings), 3)
+        self.assertFalse(report.ready)
+        self.assertEqual(report.blockers, ())  # nothing on the page is wrong: it only proves nothing
+        self.assertEqual(len(report.unproven), 3)
+        self.assertIn("tender reference", " ".join(report.unproven))
+        self.assertIn("position", " ".join(report.unproven))
+        self.assertIn("total 500.00", " ".join(report.unproven))
+        self.assertIn("NOT SHOWN", report.text())
+        self.assertIn("review or summary step", report.text())
+
+    def test_a_no_bid_needs_no_line_total(self):
+        no_bid = Bid("T-0001", "no_bid", Decimal("0"), [], Decimal("0"))
+        report = check("Tender T-0001", no_bid, "T-0001")
+        self.assertTrue(report.ready, report.text())
+
+    def test_a_unit_price_the_review_does_not_list_only_warns(self):
+        report = check("T-0001\nPosition 1\nTotal 500,00", bid(), "T-0001")
+        self.assertTrue(report.ready, report.text())
+        self.assertIn("unit price", " ".join(report.warnings))
+        shown = check("T-0001\nPosition 1 | 40 x 12,50\nTotal 500,00", bid(), "T-0001")
+        self.assertEqual(shown.warnings, ())
+
+    def test_left_out_positions_are_named_for_the_clerk(self):
+        partial = bid()
+        partial.omitted = ["2"]
+        report = check("T-0001\nPosition 1 | 12.50\nTotal 500.00", partial, "T-0001")
+        self.assertTrue(report.ready, report.text())
+        self.assertIn("left out position(s): 2", " ".join(report.warnings))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,9 @@ from worker import ACTIONS_HELP, Agent
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
 MAIL_BUDGET = 120  # seconds one request to the mailbox may take
 CLERK_STEPS, COURIER_STEPS = 120, 25
+# How often the final step is held back because the page does not show the bid (preflight "unproven"). The wait is
+# bounded: a signed bid scores, an unsigned one does not.
+UNPROVEN_REFUSALS = 2
 # Entering a bid is reading a form and copying values: without the model's long reasoning a turn takes about half
 # the time, and the reply's "thought" still leaves it room to check a conversion.
 CLERK_THINKS, COURIER_THINKS = False, False
@@ -63,6 +66,8 @@ One more action:
   {{"do": "check_submission"}}
       Read the current review page and produce a no-model checklist of visible errors, unfilled required controls,
       tender reference, offered positions and total. Run this immediately before the irreversible final step.
+      BLOCKER is something the page shows to be wrong. NOT SHOWN is something a review must show and this page
+      does not: a page that does not show the bid proves nothing about what the portal holds.
   {{"do": "finalize", "id": 12}}
       Press the final submit/confirm control only after check_submission reported READY. Never use ordinary click for
       the irreversible final submit control.
@@ -147,6 +152,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     guard = sanity.TypingGuard() if sanity.enabled("typing_guard") else None
     codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
     review: Report | None = None
+    held_back = 0  # final steps refused because the page did not show the bid
 
     # The courier gets a fresh tab in the mailbox's browser (same session), opened now in the background while the
     # bid form is filled: the investigators' tab can be left half-navigated by the deadline that stopped them, and
@@ -194,17 +200,33 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             guard.allow(answer)  # read from the mailbox during the run: the clerk may type it
         return f'the mailbox colleague answers: "{answer}"' + (f' ({outcome["summary"]})' if outcome.get("summary") else "")
 
+    async def look() -> Report:
+        report = check_review(await tender_tab.observe(), bid, reference)
+        if report.unproven and not sanity.enabled("summary_check"):  # switched off: missing evidence only warns
+            report = Report(not report.blockers, report.blockers, report.warnings + report.unproven, report.checks)
+        return report
+
     async def check_submission(action: dict) -> str:
         nonlocal review
-        review = check_review(await tender_tab.observe(), bid, reference)
+        review = await look()
         return review.text()
 
     async def finalize(action: dict) -> str:
-        nonlocal review
+        nonlocal review, held_back
         # Navigation, expiry and server validation can invalidate an earlier review, so inspect it again.
-        review = check_review(await tender_tab.observe(), bid, reference)
-        if not review.ready:
+        review = await look()
+        if review.blockers:
             return review.text() + "\nFinal submission was not pressed."
+        if review.unproven:
+            # The page does not show the bid, so pressing here would confirm something nobody compared. The clerk
+            # is sent to a page that does show it, a bounded number of times and never when time is short.
+            short = deadline - time.time() < WRAP_UP
+            if held_back < UNPROVEN_REFUSALS and not short:
+                held_back += 1
+                return review.text() + "\nFinal submission was not pressed."
+            print("[submit] final step pressed without full review evidence ("
+                  + ("time is short" if short else f"held back {held_back} time(s)") + "): "
+                  + " | ".join(review.unproven), flush=True)
         return await tender_tab.click(action.get("id"))
 
     def heading() -> str:
