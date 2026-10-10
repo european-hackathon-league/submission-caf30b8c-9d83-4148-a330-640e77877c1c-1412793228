@@ -17,6 +17,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import llm
+import sanity
 from browser_env import PAGE_BREAK
 from sanity import same_value
 from calculator import (Authorities, BonusBand, Clarification, Commitment, MASS_TO_GRAMS, Material, Position,
@@ -344,6 +345,12 @@ class CaseFile:
                                       think=False, max_tokens=12000, label=f"extract:{kind}",
                                       provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
             data, validation = validate_extraction(kind, raw)
+            if data and sanity.enabled("grounding"):
+                data, dropped = sanity.ground(data, text)
+                if dropped:
+                    note = "not found on the page, so left out: " + ", ".join(dropped[:12])
+                    validation = f"{validation}; {note}" if validation else note
+                    print(f"[grounding {kind}] {note}"[:1500], flush=True)
             stock_note = _strip_physical_only_stock(text, data) if kind == "material" else ""
             if stock_note:
                 validation = f"{validation}; {stock_note}" if validation else stock_note

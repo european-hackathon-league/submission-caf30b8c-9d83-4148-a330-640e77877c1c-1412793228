@@ -11,7 +11,7 @@ class Switching(unittest.TestCase):
     def test_default_runs_every_implemented_check(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SANITY_CHECKS", None)
-            self.assertEqual(set(sanity.active()), {c.name for c in sanity.REGISTRY.values() if c.implemented})
+            self.assertEqual(set(sanity.active()), {c.name for c in sanity.REGISTRY.values() if c.implemented and c.default})
 
     def test_none_and_a_list(self):
         with mock.patch.dict(os.environ, {"SANITY_CHECKS": "none"}):
@@ -19,9 +19,44 @@ class Switching(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SANITY_CHECKS": "validator, typing_guard"}):
             self.assertEqual(set(sanity.active()), {"validator", "typing_guard"})
 
-    def test_a_planned_check_never_runs(self):
+    def test_a_check_that_is_off_by_default_runs_when_named(self):
         with mock.patch.dict(os.environ, {"SANITY_CHECKS": "grounding"}):
+            self.assertTrue(sanity.enabled("grounding"))
+            self.assertFalse(sanity.enabled("validator"))
+
+
+class Grounding(unittest.TestCase):
+    PAGE = "Material M-100 · Frei verwendbar: 1.234 St · Preis 2.930,65 EUR · Gruppe G-77 · Hub 500 mm"
+
+    def test_values_on_the_page_are_kept_in_any_number_notation(self):
+        data = {"materials": [{"material_number": "M-100", "free_stock": 1234, "price": "2.930,65",
+                               "catalogue_group": "G-77", "stroke_mm": 500}]}
+        _, dropped = sanity.ground(data, self.PAGE)
+        self.assertEqual(dropped, [])
+
+    def test_a_number_or_id_not_on_the_page_is_dropped(self):
+        data = {"materials": [{"material_number": "M-100", "carton_size": 12, "catalogue_group": "M-10"}]}
+        data, dropped = sanity.ground(data, self.PAGE)
+        self.assertIsNone(data["materials"][0]["carton_size"])  # "12" only occurs inside "1.234"
+        self.assertIsNone(data["materials"][0]["catalogue_group"])  # "M-10" only occurs inside "M-100"
+        self.assertEqual(data["materials"][0]["material_number"], "M-100")
+        self.assertEqual(len(dropped), 2)
+
+    def test_converted_fields_and_words_are_not_checked(self):
+        data = {"materials": [{"valid_from": "2030-01-01", "mounting": "flange", "is_active": True}]}
+        _, dropped = sanity.ground(data, self.PAGE)
+        self.assertEqual(dropped, [])
+
+    def test_invisible_characters_in_the_page_do_not_matter(self):
+        _, dropped = sanity.ground({"id": "G-77"}, "Gruppe G-" + chr(0x200B) + "77")
+        self.assertEqual(dropped, [])
+
+    def test_grounding_is_off_by_default_and_on_with_all(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SANITY_CHECKS", None)
             self.assertFalse(sanity.enabled("grounding"))
+        with mock.patch.dict(os.environ, {"SANITY_CHECKS": "all"}):
+            self.assertTrue(sanity.enabled("grounding"))
 
 
 class TypingGuard(unittest.TestCase):

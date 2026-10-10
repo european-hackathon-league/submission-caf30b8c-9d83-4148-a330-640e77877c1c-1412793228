@@ -21,6 +21,7 @@ class Check:
     stage: str  # where it hooks in
     catches: str
     implemented: bool
+    default: bool = True  # on when SANITY_CHECKS is unset; "all" also turns on the ones that are off by default
 
 
 REGISTRY: dict[str, Check] = {check.name: check for check in (
@@ -32,8 +33,12 @@ REGISTRY: dict[str, Check] = {check.name: check for check in (
           "an unknown mailbox address filled in by guessing: the clerk asks the mailbox colleague instead", True),
     Check("coverage_gate", "before an agent closes a question",
           "a question closed as absent after one search, or closed over a list that stopped at its page limit", True),
+    Check("agent_restart", "an investigator that stops unfinished",
+          "an agent that ended at its step limit or in a loop while its questions are still open: one fresh restart "
+          "(new tab, new conversation) while at least 2 minutes of investigation remain", True),
     Check("grounding", "every fact the extraction returns",
-          "extracted numbers, keys and identifiers that do not appear in the page they came from", False),
+          "extracted numbers, keys and identifiers that do not appear in the page they came from", True,
+          default=False),  # off until a sandbox run shows it helps: it could also drop a value written differently
     Check("summary_check", "before the final signature",
           "a final confirmation on a page that does not show the bid's reference, positions and total", True),
 )}
@@ -44,7 +49,9 @@ def enabled(name: str) -> bool:
     if check is None or not check.implemented:
         return False
     choice = os.environ.get("SANITY_CHECKS", "default").strip().lower()
-    if choice in ("", "default", "all"):
+    if choice in ("", "default"):
+        return check.default
+    if choice == "all":
         return True
     if choice == "none":
         return False
@@ -141,3 +148,61 @@ class TypingGuard:
         return (f'blocked: "{text[:60]}" is not in the bid sheet, the bidder details or anything the mailbox colleague '
                 "reported. Type values exactly from that data. If the form asks for something you do not have, ask "
                 "the mailbox colleague (ask_mail) or leave the field empty; never make a value up.")
+
+
+# ---- grounding ------------------------------------------------------------------------------------------------------
+
+# Fields the extraction converts by design (dates to ISO, yes/no, formats, free text): not looked up in the page.
+_NOT_GROUNDED = {"timestamp", "date", "valid_from", "valid_to", "number_format", "topic", "status", "status_text",
+                 "description", "note", "summary", "subject", "is_active", "unit_is_set", "stroke_is_usable_travel",
+                 "unit", "allocation_mass_unit", "surcharge_mass_unit", "price_unit", "currency", "kind"}
+_SEPARATOR = re.compile(r"(?<=\d)[.,\s'  ](?=\d)")
+
+
+def _page_forms(text: str) -> tuple[str, str]:
+    plain = re.sub(r"\s+", " ", _clean(text)).lower()
+    return plain, _SEPARATOR.sub("", plain)
+
+
+def _in_page(value, forms: tuple[str, str]) -> bool:
+    plain, digits = forms
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float, Decimal)):
+        token = re.escape(str(value))
+        # a whole number, not a fragment of a longer one ("12" must not match inside "1234")
+        return bool(re.search(rf"(?<![\d.,]){token}(?![\d])", digits) or re.search(rf"(?<![\d]){token}(?![\d])", plain))
+    text = re.sub(r"\s+", " ", _clean(value)).lower()
+    if not re.search(r"\d", text):
+        return True  # only numbers, keys and identifiers are checked: words may be paraphrased by design
+    pattern = rf"(?<![\w]){re.escape(text)}(?![\w])"
+    squeezed = rf"(?<![\w]){re.escape(_SEPARATOR.sub('', text))}(?![\w])"
+    return bool(re.search(pattern, plain) or re.search(squeezed, digits))
+
+
+def ground(data, page_text: str) -> tuple[object, list[str]]:
+    """Blanks every extracted number, key or identifier that does not appear in the page it was extracted from.
+    Returns the data and what was dropped, for the agent's news (it then re-reads the page)."""
+    forms = _page_forms(page_text)
+    dropped: list[str] = []
+
+    def walk(node, path: str):
+        if isinstance(node, dict):
+            for key, value in list(node.items()):
+                if key in _NOT_GROUNDED or value is None:
+                    continue
+                if isinstance(value, (dict, list)):
+                    walk(value, f"{path}.{key}")
+                elif not _in_page(value, forms):
+                    dropped.append(f"{path}.{key}={str(value)[:40]}")
+                    node[key] = None
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                if isinstance(item, (dict, list)):
+                    walk(item, f"{path}[{index}]")
+                elif item is not None and not _in_page(item, forms):
+                    dropped.append(f"{path}[{index}]={str(item)[:40]}")
+                    node[index] = None
+
+    walk(data, "")
+    return data, dropped

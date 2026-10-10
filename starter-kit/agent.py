@@ -28,6 +28,8 @@ import validate
 from casefile import SHAPES, CaseFile, read_context
 from worker import ACTIONS_HELP, Agent
 
+RESTART_MIN_SECONDS = 120  # an unfinished agent is restarted only while this much investigation time is left
+
 INVESTIGATOR = """You are one of several research agents preparing a tender bid for a manufacturer's sales
 engineering team. Each agent works a different website at the same time; you work the website "{site}" at {url}
 in your own browser tab. Together you must find every fact the bid rules need. You only find and file evidence:
@@ -204,12 +206,27 @@ async def solve(task: dict, playwright) -> dict | None:
         working = [tab for name, tab in tabs.items() if not only or name in only]
         team = Team(case, [tab.site_id for tab in working], investigate_until)
         async def bounded(tab):  # an agent stuck past the deadline is stopped so that the others' facts still count
-            limit = max(10.0, investigate_until - time.time() + 20)
-            try:
-                return await asyncio.wait_for(investigator(case, team, tab, investigate_until).run(), limit)
-            except asyncio.TimeoutError:
-                team.finished.set()
-                return RuntimeError(f"stopped after {limit:.0f} s: still busy at the investigation deadline")
+            restarted = False
+            while True:
+                limit = max(10.0, investigate_until - time.time() + 20)
+                try:
+                    outcome = await asyncio.wait_for(investigator(case, team, tab, investigate_until).run(), limit)
+                except asyncio.TimeoutError:
+                    team.finished.set()
+                    return RuntimeError(f"stopped after {limit:.0f} s: still busy at the investigation deadline")
+                # Weak sandbox runs (10, 22.8, 27.8, 29.1) had agents end with done: false while time was left. One
+                # fresh start, with a clean conversation in a new tab, instead of giving the site up (sanity.py).
+                if (sanity.enabled("agent_restart") and not restarted and not outcome.get("done")
+                        and investigate_until - time.time() > RESTART_MIN_SECONDS and case.questions()):
+                    restarted = True
+                    print(f"[{tab.site_id}] stopped unfinished after {outcome.get('steps')} steps; restarting once "
+                          "in a fresh tab", flush=True)
+                    try:
+                        await asyncio.wait_for(tab.renew(), 45)
+                    except Exception as error:  # noqa: BLE001
+                        print(f"[{tab.site_id}] could not renew the tab: {str(error)[:150]}", flush=True)
+                    continue
+                return outcome
         outcomes = await asyncio.gather(*(bounded(tab) for tab in working), return_exceptions=True)
         for tab, outcome in zip(working, outcomes):
             print(f"[{tab.site_id}] finished: {outcome if isinstance(outcome, Exception) else json.dumps(outcome, ensure_ascii=False)[:300]}", flush=True)
