@@ -30,6 +30,17 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 10 | **Speed: stuck investigators** (100 run 74b22ceb took 19.3 of 20 min) | The tender-portal agent opened the same unchanged page 122× (~8 min); the investigation waits for every agent, so it ran to its time limit. Without the loop it would have ended around min 4-5 | 🟨 Maria, branch `maria/erp-loop-fixes` 76db483: a stuck investigator is sent idle (6 identical rounds, or circling after 2 hints) and woken by news; 296 tests OK; needs a sandbox run |
 | 9 | Work on branches, not main | Pushing to main got in the way of the other builders | Everyone; merge to main only when agreed |
 
+## Where the cost goes (keep in mind for every change)
+
+Measured on the branch's 100 run 2b8b5ca8 ($0.31): **199 calls sent 2.48 M input tokens, about 12,400 per call,
+and only 36% were cached. Uncached input is about $0.24 of the $0.31; output is about $0.01.** Prices: input
+$0.15/M, cached input $0.016/M, output $0.47/M.
+
+So the cost is mostly every turn re-sending the whole page, the case file and the history, for every agent. Levers,
+by expected payoff: (1) fewer turns (loops stopped), (2) smaller prompts (trim page text and history, show each
+agent only its part of the case file), (3) more caching (keep the start of every prompt identical across turns),
+(4) fewer agents (less fixed context per agent, but a more sequential, slower run). Measure locally before changing.
+
 ## Branch and bound, local (21:00 UTC, no sandbox runs while the organisers refresh)
 
 **Bound 1: what decided each of the 29 sandbox runs** (`python tuning/run_report.py`): 8 clean, 4 agent loop,
