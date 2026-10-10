@@ -16,7 +16,7 @@ from typing import Awaitable, Callable
 
 import llm
 import sanity
-from browser_env import Tab
+from browser_env import NOT_KEPT, Tab
 from coverage import Ledger
 
 ACTIONS_HELP = """Reply with ONE JSON object: {"thought": "<one or two short sentences: what the page tells you and what you do next>", "actions": [ ... ]}.
@@ -243,7 +243,7 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
-                if do == "fill":
+                if do == "fill" and NOT_KEPT not in str(result):  # a text the field refused was never searched
                     self.coverage.typed(before, action.get("text", ""))
                 elif do == "collect":
                     self.coverage.followed(getattr(self.tab, "last_collect", None))
