@@ -100,10 +100,26 @@ class Team:
         self.finished = asyncio.Event()
         self.woken: dict[str, float] = {}  # when an agent was last woken for finished reading (at most every 30 s)
 
+    def release(self, name: str, candidates: set[str]) -> None:
+        """A routed agent (ERP or mail) went idle leaving `candidates` open and nothing is being read any more: those
+        go to every agent (RELEASED), and the others are woken by a case-file change. Questions that turn up while it
+        is idle are its own work (it is woken for them), so only the ones open when it went idle are candidates."""
+        if self.case.pending or site_role(name) is None:
+            return
+        still = {qid for qid, _ in self.case.questions()} & candidates
+        fresh = still - RELEASED
+        if fresh:
+            RELEASED.update(fresh)
+            print(f"[{name}] left open, now offered to every agent: {', '.join(sorted(fresh))}", flush=True)
+            bump = getattr(self.case, "_bump", None)
+            if bump:
+                bump()
+
     def hook(self, name: str):
         async def hold(why: str) -> str | None:
-            version = self.case.version
             before = {qid for qid, _ in questions_for_site(name, self.case.questions())}
+            self.release(name, before)
+            version = self.case.version
             # Documents still being read when the agent went idle: once one of them is done, the agent is woken if
             # questions are still open. Sandbox run 024bd2ac: the ERP agent went idle "until the requirements are
             # read" with its material questions already open; they were never new, so it slept for 400 s.
@@ -115,6 +131,7 @@ class Team:
                     if self.finished.is_set():
                         break
                     if changed:
+                        self.release(name, before)
                         version = self.case.version
                         fresh = {qid for qid, _ in questions_for_site(name, self.case.questions())} - before
                         if fresh or self.case.news.get(name):
@@ -190,6 +207,20 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
 # Which website plays which role in this run, as the model read it from the brief (solve). The private dataset uses
 # other site names, so routing goes by role first and falls back to the public site names only without one.
 SITE_ROLES: dict[str, str] = {}
+# Routed questions their own agent left open after it finished, with nothing still being read: offered to every agent
+# from then on. The routing assumes the public split of facts (materials in the ERP, keys and approvals in the mail);
+# the private dataset may split them differently, and a routed question must not end up with nobody to answer it.
+RELEASED: set[str] = set()
+
+
+def site_role(site_id: str) -> str | None:
+    """"erp" or "mail" for the agent whose questions are routed, None for one that sees every question."""
+    site = site_id.casefold()
+    for role in ("erp", "mail"):
+        named = (SITE_ROLES.get(role) or "").casefold()
+        if (site == named) if named else (role in site):
+            return role
+    return None
 
 
 def questions_for_site(site_id: str, questions: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -203,11 +234,12 @@ def questions_for_site(site_id: str, questions: list[tuple[str, str]]) -> list[t
 
     if plays("erp"):
         prefixes = ("material:", "data:")
-        return [(qid, text) for qid, text in questions if qid.startswith(prefixes)]
+        return [(qid, text) for qid, text in questions if qid.startswith(prefixes) or qid in RELEASED]
     if plays("mail"):
         prefixes = ("condition_group:", "packaging_tariff:", "delivery_commitment:", "setup_pool:",
                     "project_bonus:", "index:", "fx:", "reserve:")
-        return [(qid, text) for qid, text in questions if qid in ("mailbox", "discount") or qid.startswith(prefixes)]
+        return [(qid, text) for qid, text in questions
+                if qid in ("mailbox", "discount") or qid.startswith(prefixes) or qid in RELEASED]
     return questions
 
 
@@ -237,6 +269,7 @@ async def solve(task: dict, playwright) -> dict | None:
     listing = "\n".join(f"- {site['siteId']}: {site['url']}" for site in sites)
     context = await read_context(brief + f"\n\nThe websites of this run:\n{listing}")
     SITE_ROLES.clear()
+    RELEASED.clear()
     SITE_ROLES.update({role: str(context.get(f"{role}_site") or "") for role in ("erp", "mail")
                        if str(context.get(f"{role}_site") or "") in {site["siteId"] for site in sites}})
     case = CaseFile(brief, context)

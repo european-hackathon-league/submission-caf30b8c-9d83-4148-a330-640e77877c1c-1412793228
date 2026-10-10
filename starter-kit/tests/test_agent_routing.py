@@ -23,12 +23,13 @@ class FakeCase:
         return list(self.open_questions)
 
     async def wait_change(self, seen, timeout):
+        """As CaseFile.wait_change: clear first, then wait, so an old signal does not count as a new change."""
         if self.version == seen:
+            self.changed.clear()
             try:
                 await asyncio.wait_for(self.changed.wait(), timeout)
             except asyncio.TimeoutError:
                 return False
-            self.changed.clear()
         return self.version != seen
 
     def update(self, question):
@@ -38,6 +39,12 @@ class FakeCase:
 
 
 class QuestionRouting(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        agent.SITE_ROLES.clear()
+        agent.RELEASED.clear()
+
+    tearDown = setUp
+
     def test_erp_and_mail_receive_only_resolvable_questions(self):
         questions = [
             ("positions", "Find tender positions."),
@@ -65,6 +72,34 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
         finally:
             agent.SITE_ROLES.clear()
 
+
+    async def test_a_routed_question_left_open_is_offered_to_every_agent(self):
+        """The private dataset may split facts differently: here the packaging tariff sits in the ERP, so the mail
+        agent finishes without it. The question must reach the ERP agent instead of staying with nobody."""
+        case = FakeCase()
+        case.open_questions = [("packaging_tariff:PKG-9", "the tariff"), ("material:REQ-1", "the material")]
+        case._bump = lambda: (setattr(case, "version", case.version + 1), case.changed.set())
+        team = Team(case, ["erp", "mail"], time.time() + 5)
+        try:
+            agent.SITE_ROLES.update({"erp": "erp", "mail": "mail"})
+            erp_waiting = asyncio.create_task(team.hook("erp")("done"))  # ERP finished its own question set
+            await asyncio.sleep(0.02)
+            self.assertIn("material:REQ-1", agent.RELEASED)  # ERP went idle with it open and nothing being read
+            mail_waiting = asyncio.create_task(team.hook("mail")("done"))  # mail finished without the tariff
+            news = await asyncio.wait_for(erp_waiting, 2)
+            self.assertIn("packaging_tariff:PKG-9", news or "")
+            self.assertIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("erp", case.questions())])
+            mail_waiting.cancel()
+        finally:
+            agent.SITE_ROLES.clear()
+            agent.RELEASED.clear()
+
+    def test_nothing_is_released_while_documents_are_still_being_read(self):
+        case = FakeCase()
+        case.open_questions = [("packaging_tariff:PKG-9", "the tariff")]
+        case.pending = 1
+        Team(case, ["mail"], time.time() + 5).release("mail", {"packaging_tariff:PKG-9"})
+        self.assertEqual(agent.RELEASED, set())
 
     async def test_erp_idle_hook_ignores_new_mail_questions(self):
         case = FakeCase()
