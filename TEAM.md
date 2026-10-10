@@ -45,6 +45,7 @@ case. What was checked on branch `maria/erp-loop-fixes` (not merged):
 | Calculator rules on invented data | 148 rule-by-rule tests + a whole invented tender priced by hand, every field (`test_invented_tender.py`): **all match**. Low overfitting risk in pricing |
 | Public names in the package | Only v1's question routing keyed on the site names "erp"/"mail". **Fixed (b9dddbb):** routing now uses the roles the model reads from the brief, names only as fallback; test with invented site names |
 | Document formats (`test_document_formats.py`, invented files) | **5 of 7 failed:** XLSX rows lost, Office internals in the text, DOCX table cells run together, Windows-1252 CSV umlauts broken, file 3 archives deep not read. **Fixed (9c3081a)**, 7/7 pass |
+| Changed-data review (11 Oct, night) | No public-scenario words in the package code or prompts (portal labels, rule names). Units outside the known list fall back to the model's own set/piece flag. Money values carry a format tag from extraction; German dimensions in amendments were already read correctly. **Found and fixed (dd8127d): a whole number written "1.250" or "1,250" (quantity, stroke, carton, weeks) was read as 1**; public-1 never had such values. Routing by role with a fallback when facts are split differently (279dad9) |
 | Still open | Scanned (image-only) PDFs: no OCR. Prompts and hints were written from public-scenario failures (no public values in them) |
 
 ## Where the cost goes (keep in mind for every change)
