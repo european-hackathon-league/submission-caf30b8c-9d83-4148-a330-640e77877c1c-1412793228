@@ -48,12 +48,14 @@ Reply with one JSON object of the requested shape and nothing else."""
 SHAPES = {
     "positions": """The tender's bill of quantities.
 {"positions": [{"position": "<position number>", "description": "<short text>", "quantity": <integer as published>,
-  "unit": "<unit as written>", "unit_is_set": <true if the unit counts sets/kits of several pieces, false for pieces>,
+  "unit": "<unit as written>", "unit_is_set": <true if the unit counts sets/kits of several pieces, false for individual pieces>,
   "requirement_ref": "<the specification requirement this position refers to>"}]}""",
     "clarifications": """Answers of the tender's bidder Q&A. One entry per answer; an answer that changes nothing still gets an entry.
 {"answers": [{"number": "<answer number>", "timestamp": "<when it was issued>",
   "withdraws": ["<number of an earlier answer this one withdraws>"],
-  "quantity_changes": [{"position": "<position>", "quantity": <new binding quantity>, "unit_is_set": <true|false|null if the unit is not restated>}],
+  "quantity_changes": [{"position": "<position>", "quantity": <new binding quantity>,
+     "unit": "<unit explicitly restated in this answer, otherwise omit>",
+     "unit_is_set": <true for sets/kits or false for individual pieces ONLY when unit is explicitly restated; otherwise null>}],
   "tech_amendments": [{"revision": "<specification revision it names>", "requirement_ref": "<requirement>",
      "attribute": "stroke|bore|pressure|mounting|certification", "value": "<new value, number without unit for the first three>"}],
   "assignments": [{"position": "<position>", "condition_group": "<key or null>", "packaging_tariff": "<key or null>",
@@ -126,6 +128,19 @@ def _int(value) -> int | None:
 def _text(value) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text if text and text.lower() not in ("null", "none", "n/a", "-", "—") else None
+
+
+def _unit_is_set(unit) -> bool | None:
+    """Classify only explicit, familiar piece/set unit labels; never guess from quantity or wording context."""
+    value = _text(unit)
+    if value is None:
+        return None
+    token = re.sub(r"[^a-zäöüß]", "", value.lower())
+    if token in {"stk", "stück", "stueck", "pc", "pcs", "piece", "pieces", "unit", "units", "ea", "each"}:
+        return False
+    if token in {"satz", "sätze", "saetze", "set", "sets", "kit", "kits", "pack", "packs", "pair", "pairs", "garnitur", "garnituren"}:
+        return True
+    return None
 
 
 RECORD_LISTS: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -266,7 +281,9 @@ class CaseFile:
 
     async def _extract(self, kind: str, text: str, source: str, agent: str, digest: str = "") -> None:
         try:
-            prompt = (f"TASK BRIEF\n{self.brief}\n\nThe tender reference is {self.reference}; the scenario date is "
+            # The extraction schema contains the exact facts needed downstream. Repeating the full rules brief
+            # for every page made these independent extraction calls unnecessarily large and slow.
+            prompt = (f"The tender reference is {self.reference}; the scenario date is "
                       f"{self.scenario.isoformat()}.\n\nKIND OF RECORD: {kind}\nSHAPE\n{SHAPES[kind]}\n\n"
                       f"EVIDENCE (from {source})\n{text[:60000]}")
             raw = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
@@ -454,7 +471,10 @@ class CaseFile:
             for change in row.get("quantity_changes") or []:
                 quantity = _int(change.get("quantity"))
                 if _text(change.get("position")) and quantity is not None:
-                    entry.quantity_changes.append((change["position"].strip(), quantity, change.get("unit_is_set")))
+                    # The explicit unit is the source of truth. A model's boolean without a copied unit can
+                    # contradict the tender's unit and silently omit an otherwise valid position.
+                    entry.quantity_changes.append((change["position"].strip(), quantity,
+                                                   _unit_is_set(change.get("unit"))))
             for change in row.get("tech_amendments") or []:
                 if _text(change.get("requirement_ref")) and _text(change.get("attribute")) and change.get("value") is not None:
                     entry.amendments.append((_text(change.get("revision")) or "", change["requirement_ref"].strip(),

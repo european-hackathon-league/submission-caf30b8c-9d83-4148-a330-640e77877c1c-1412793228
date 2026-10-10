@@ -12,6 +12,14 @@ import llm  # noqa: E402
 
 
 class EvidenceProvenance(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_unit_notation_controls_piece_or_set_classification(self):
+        self.assertFalse(casefile._unit_is_set("Stk."))
+        self.assertFalse(casefile._unit_is_set("pieces"))
+        self.assertTrue(casefile._unit_is_set("Satz"))
+        self.assertTrue(casefile._unit_is_set("kits"))
+        self.assertIsNone(casefile._unit_is_set(None))
+        self.assertIsNone(casefile._unit_is_set("unknown-unit"))
+
     async def test_successful_extraction_records_its_source_and_typed_result(self):
         facts = casefile.CaseFile("brief", {"tender_reference": "TEST-0001", "scenario_date": "2030-01-01"})
 

@@ -1,8 +1,9 @@
 """A conservative, no-model checklist for the tender portal's review page.
 
 The clerk decides when it has reached a review page.  This module only reports
-what the accessible page proves and blocks finalisation on explicit errors or
-unfilled required controls; it never invents portal-specific field mappings.
+what the accessible page proves and blocks finalisation on explicit errors,
+unfilled required controls, or a review that omits the bid's reference/summary.
+It never invents portal-specific field mappings.
 """
 from __future__ import annotations
 
@@ -57,16 +58,19 @@ def check(page: str, bid: Bid, reference: str) -> Report:
     if reference and reference.lower() in lower:
         checks.append(f"tender reference {reference} is visible")
     else:
-        warnings.append(f"tender reference {reference} is not visible on this page")
+        blockers.append(f"tender reference {reference} is not visible on this review page")
     expected = [line.position for line in bid.lines]
     missing = [position for position in expected if not re.search(rf"(?<![\w.-]){re.escape(position)}(?![\w.-])", visible)]
     if missing:
-        warnings.append("offered position(s) not visible in this review: " + ", ".join(missing))
+        blockers.append("offered position(s) not visible in this review: " + ", ".join(missing))
     else:
         checks.append("every offered position is visible")
-    amounts = _money(Decimal(bid.total_net))
-    if any(amount in visible for amount in amounts):
-        checks.append("calculated total is visible")
-    else:
-        warnings.append("calculated total is not visible on this page")
+    if bid.decision == "bid":
+        amounts = _money(Decimal(bid.total_net))
+        if any(amount in visible for amount in amounts):
+            checks.append("calculated total is visible")
+        else:
+            blockers.append("calculated total is not visible on this review page")
+        if bid.omitted:
+            warnings.append("calculator marked position(s) as omitted: " + ", ".join(bid.omitted))
     return Report(not blockers, tuple(blockers), tuple(warnings), tuple(checks))

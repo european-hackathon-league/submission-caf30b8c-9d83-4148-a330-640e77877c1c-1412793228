@@ -24,10 +24,18 @@ class ReviewPages(unittest.TestCase):
         self.assertFalse(report.ready)
         self.assertEqual(len(report.blockers), 2)
 
-    def test_absent_summary_values_warn_without_guessing_a_failure(self):
+    def test_incomplete_review_blocks_finalisation_until_summary_is_visible(self):
         report = check('[9] button "Continue"', bid(), "T-0001")
-        self.assertTrue(report.ready)
-        self.assertGreaterEqual(len(report.warnings), 3)
+        self.assertFalse(report.ready)
+        self.assertEqual(len(report.blockers), 3)
+        self.assertIn("tender reference", " ".join(report.blockers))
+        self.assertIn("position", " ".join(report.blockers))
+        self.assertIn("total", " ".join(report.blockers))
+
+    def test_no_bid_does_not_require_a_line_total(self):
+        no_bid = Bid("T-0001", "no_bid", Decimal("0"), [], Decimal("0"))
+        report = check("Tender T-0001", no_bid, "T-0001")
+        self.assertTrue(report.ready, report.text())
 
 
 if __name__ == "__main__":
