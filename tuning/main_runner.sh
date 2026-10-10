@@ -3,6 +3,7 @@
 #
 #   bash tuning/main_runner.sh [run_id_to_wait_for]
 #   REF=origin/<branch> bash tuning/main_runner.sh      # test a branch instead of main
+#   NOWAIT=1 bash tuning/main_runner.sh                 # start at once, next to other team runs
 #
 # Without an argument: waits until no team run is active, checks out origin/main into a clean worktree (never the
 # working copy, which may hold uncommitted work), scans it for scenario values, starts one test run and waits for it.
@@ -18,7 +19,7 @@ run="${1:-}"
 commit="?"
 ref="${REF:-origin/main}"
 if [ -z "$run" ]; then
-  for _ in $(seq 1 90); do                      # one at a time: wait for every active team run
+  [ -n "${NOWAIT:-}" ] || for _ in $(seq 1 90); do  # unless NOWAIT: wait for every active team run
     "$A" status 2>&1 | grep -qE " running| in review| in evaluation" || break
     sleep 60
   done
