@@ -106,6 +106,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| ~22:40 | run_9f5d8f25 | Maria | branch `maria/escalation` **ae31fb3**: everything below + escalation (stronger turn with screenshot for stuck agents) | running | | | | First sandbox run of escalation |
+| ~22:40 | run_294db2ef | Maria | branch `maria/erp-loop-fixes` **9c3081a**: loop fixes, failover, role-based routing, Word/Excel/CSV reading | running | | | | First sandbox run of role routing + formats; the comparison base for escalation |
+| 22:33 | run_0634f300 | Vamshidhar | ? | running | | | | |
 | 21:59 | **run_0c9769e1** | Vamshidhar | `vamshidhar/reliable-calls` **on Maria's branch 288c88c** (browser failover) + uncommitted: 30 s call cap + backup request, changed-fact notice | **100** 🎉 | ✅ | **8.9 min** 🏆 | 239 / $0.33 | **Our fastest 100.** Clean: investigation 295 s, 0 model timeouts, longest repeat 6× |
 | 21:59 | run_c9f3431c | Vamshidhar | same as 0c9769e1 | – | | | 0 calls | **Platform failure** (Atira: "The platform failed, not your agent system"); does not count |
 | 21:37 | **run_2807dc37** | Vamshidhar | package 2a5086da (no label) | **100** 🎉 | ✅ | 12.8 min | 205 / $0.27 | Clean: investigation 416 s, longest repeat 4×, 1 timeout |
