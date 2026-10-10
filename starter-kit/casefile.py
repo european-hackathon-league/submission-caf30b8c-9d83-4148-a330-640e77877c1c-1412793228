@@ -128,6 +128,11 @@ _SET_UNITS = {"satz", "sätze", "saetze", "set", "sets", "kit", "kits"}
 
 
 def _int(value) -> int | None:
+    """A whole number (quantity, stroke, carton size, weeks). "1.250" and "1,250" are one thousand two hundred and
+    fifty here, not 1.25: a whole-number field has no decimals, so a separator before exactly three digits groups
+    thousands, in German and in English writing alike."""
+    if isinstance(value, str) and re.fullmatch(r"\s*\d{1,3}(?:[.,'  ]\d{3})+\s*", value):
+        value = re.sub(r"[.,'  \s]", "", value)
     number = parse_number(value)
     return int(number) if number is not None else None
 
