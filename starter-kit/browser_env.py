@@ -62,7 +62,7 @@ SNAPSHOT_JS = r"""
     return s;
   };
   const byIds = ids => clean((ids || '').split(/\s+/).map(id => { const e = id && document.getElementById(id); return e ? textOf(e, true) : ''; }).join(' '));
-  const nameOf = el => clean(byIds(el.getAttribute('aria-labelledby')) || textOf(el, false) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('value') || '');
+  const nameOf = el => clean(byIds(el.getAttribute('aria-labelledby')) || el.getAttribute('aria-label') || textOf(el, false) || el.getAttribute('title') || el.getAttribute('value') || '');
   const labelOf = el => {
     const parts = [byIds(el.getAttribute('aria-labelledby')), el.getAttribute('aria-label') || ''];
     if (el.labels) for (const l of el.labels) parts.push(textOf(l, false));
@@ -109,7 +109,7 @@ SNAPSHOT_JS = r"""
       const options = [...el.options].slice(0, 80).map(o => (o.selected ? '*' : '') + (clean(o.textContent) === o.value ? q(o.value) : q(o.value) + '=' + q(o.textContent)));
       return tag(el, collapsed) + ' select ' + q(labelOf(el)) + flags(el) + ' options(* = selected): ' + options.join('; ') + (el.options.length > 80 ? '; …' : '');
     }
-    if (t === 'SUMMARY') return null;
+    if (t === 'SUMMARY') return tag(el, collapsed) + ' toggle ' + q(nameOf(el)) + (el.parentElement && el.parentElement.open ? ' [open]' : ' [closed]') + flags(el);
     if (['link', 'tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch', 'treeitem'].includes(role) || el.hasAttribute('onclick') || el.isContentEditable && !el.parentElement.isContentEditable)
       return tag(el, collapsed) + ' ' + (role || 'clickable') + ' ' + q(nameOf(el)) + flags(el) + dataHints(el) + descr(el);
     return null;
@@ -122,7 +122,7 @@ SNAPSHOT_JS = r"""
     && !!el.querySelector('a[href],button,[role=menuitem]')
     && (!!el.closest('nav,[role=navigation],[role=menubar],[role=menu]') || !!(el.previousElementSibling && el.previousElementSibling.matches('button,summary,[aria-haspopup],[aria-expanded]')));
   const walk = (node, collapsed) => {
-    if (node.nodeType === 3) { cur += node.nodeValue.replace(/\s+/g, ' '); return; }
+    if (node.nodeType === 3) { cur += node.nodeValue.replace(ZW, '').replace(/\s+/g, ' '); return; }
     if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
     const el = node, t = el.tagName.toUpperCase(), role = el.getAttribute('role') || '';
     if (isHidden(el)) {
@@ -159,7 +159,15 @@ SNAPSHOT_JS = r"""
     if (t === 'TR') {
       inline++;
       const cells = [];
-      for (const cell of el.children) { if (isHidden(cell)) continue; const before = cur; cur = ''; for (const c of cell.childNodes) walk(c, collapsed); cells.push(cur.replace(/\s+/g, ' ').trim()); cur = before; }
+      for (const cell of el.children) {
+        if (isHidden(cell)) continue;
+        const before = cur;
+        cur = pseudo(cell, '::before');
+        for (const c of cell.childNodes) walk(c, collapsed);
+        cur += pseudo(cell, '::after') + descr(cell);
+        cells.push(cur.replace(/\s+/g, ' ').trim());
+        cur = before;
+      }
       inline--;
       cur += cells.join(' | '); flush(); return;
     }
@@ -181,8 +189,14 @@ SNAPSHOT_JS = r"""
     lines.push('!! END OF MODAL DIALOG. The page behind it:');
   }
   const body = document.body || document.documentElement;
-  if (modals.length) { for (const c of body.childNodes) if (!modals.some(m => m === c || (c.nodeType === 1 && c.contains(m) && c === m))) walk(c, false); }
-  else walk(body, false);
+  if (modals.length) {
+    // A dialog can be nested inside <main>. Hide it while reading the background so it is not rendered a second
+    // time with new ids; otherwise the ids reported for its controls no longer point at any element.
+    const hidden = modals.map(m => [m, m.getAttribute('aria-hidden')]);
+    hidden.forEach(([m]) => m.setAttribute('aria-hidden', 'true'));
+    for (const c of body.childNodes) walk(c, false);
+    hidden.forEach(([m, value]) => value === null ? m.removeAttribute('aria-hidden') : m.setAttribute('aria-hidden', value));
+  } else walk(body, false);
   flush();
   return { text: lines.join('\n'), next: nextId, title: clean(document.title) };
 }
@@ -248,7 +262,7 @@ class _Text(HTMLParser):
 
 def clean_text(text: str) -> str:
     text = re.sub(r"[​-‏⁠-⁤﻿­͏؜᠎]", "", text)
-    return re.sub(r"\n\s*\n+", "\n", re.sub(r"[ \t ]+", " ", text)).strip()
+    return re.sub(r"\n\s*\n+", "\n", re.sub(r"[  ]+", " ", text)).strip()
 
 
 def without_ids(text: str) -> str:
@@ -414,6 +428,21 @@ class Tab:
         events, self.events = self.events, []
         return events
 
+    async def _modal_is_open(self) -> bool:
+        """Whether a page-level dialog now prevents ordinary controls from being used."""
+        script = """() => {
+          const visible = el => { const s = getComputedStyle(el); return !el.hidden && el.getAttribute('aria-hidden') !== 'true' && s.display !== 'none' && s.visibility !== 'hidden'; };
+          return [...document.querySelectorAll('dialog[open],[aria-modal="true"]')]
+            .some(el => visible(el) && (el.tagName !== 'DIALOG' || el.matches(':modal')));
+        }"""
+        for frame in self.page.frames:
+            try:
+                if await frame.evaluate(script):
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
     def _locator(self, aid):
         try:
             number = int(aid)
@@ -451,6 +480,8 @@ class Tab:
             except Exception as error:  # noqa: BLE001
                 return f"could not click [{aid}]: {str(error)[:150]}"
         await self.settle()
+        if await self._modal_is_open():
+            return "the page now has a modal dialog; read it before acting behind it"
         moved = self.page.url != before
         return f'clicked [{aid}] "{info["name"]}"' + (f"; now at {self.page.url}" if moved else "")
 
@@ -465,6 +496,8 @@ class Tab:
         if enter:
             await locator.press("Enter")
             await self.settle()
+        if await self._modal_is_open():
+            return "the page now has a modal dialog; read it before acting behind it"
         return f"filled [{aid}]" + (" and pressed Enter" if enter else "")
 
     async def select(self, aid, value: str) -> str:
@@ -476,6 +509,8 @@ class Tab:
             try:
                 await locator.select_option(timeout=2000, **attempt)
                 await self.settle()
+                if await self._modal_is_open():
+                    return "the page now has a modal dialog; read it before acting behind it"
                 return f'selected "{wanted}" in [{aid}]'
             except Exception:  # noqa: BLE001
                 continue
@@ -513,6 +548,8 @@ class Tab:
         except Exception as error:  # noqa: BLE001
             return f"could not set [{aid}]: {str(error)[:150]}"
         await self.settle()
+        if await self._modal_is_open():
+            return "the page now has a modal dialog; read it before acting behind it"
         return f"set [{aid}] to {value}"
 
     def _on_site(self, url: str) -> bool:
@@ -602,8 +639,16 @@ class Tab:
             pages.append(self.document)
         if len(pages) == 1:
             return f'"{info["name"]}" led to no further page; the list is the page you see'
-        grows = len(pages) > 1 and all(later.startswith(pages[0][:200]) and len(later) >= len(earlier)
-                                       for earlier, later in zip(pages, pages[1:])) and info["tag"] != "A"
+        # A button may append rows in place rather than lead to a new page. Compare page bodies without generated
+        # element ids or the changing paging control: both change between reads even when every earlier row remains.
+        def body(page: str) -> str:
+            return "\n".join(line for line in without_ids(page).splitlines()
+                             if not re.match(r'(?:button|link) "', line.strip()))
+
+        bodies = [body(page) for page in pages]
+        grows = (len(pages) > 1 and info["tag"].upper() != "A"
+                 and all(later.startswith(earlier) and len(later) >= len(earlier)
+                         for earlier, later in zip(bodies, bodies[1:])))
         if grows:  # a "load more" control: the last page holds every row
             self.document = pages[-1]
             return f'followed "{info["name"]}" {len(pages) - 1} time(s); the list is now complete on the page'
