@@ -401,6 +401,11 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
     omitted: list[str] = []
 
     lines: dict[str, Line] = {}
+    # Every position whose material and quantity are known, priced or not. Shared amounts (setup pool, project bonus,
+    # pooled stock demand) are split over all their member positions: a member that could not be priced still takes
+    # its share, so the priced ones do not absorb it (option A, agreed 10 Oct; sandbox run 9c8fe292 put the whole
+    # pool on one position because the other members were omitted).
+    known: dict[str, tuple] = {}
     for p in sorted(positions, key=lambda p: position_order(p.position)):
         need = needs.get(p.requirement_ref)
         if need is not None and p.requirement_ref not in waiting and not need.missing():
@@ -412,6 +417,8 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
                            notes=[f"no active material matches requirement {p.requirement_ref} (position {p.position})"])
         else:
             material = None
+        if material is not None and quantities.get(p.position, 0) > 0:
+            known[p.position] = (material, quantities[p.position])
         if material is None or quantities.get(p.position, 0) <= 0:
             omitted.append(p.position)
             notes.append(f"position {p.position}: " + ("set size unknown" if p.position in unknown_sets
@@ -436,40 +443,63 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
         notes.append("the conditional discount approval misses its minimum order value")
     factor = (HUNDRED - discount) / HUNDRED
 
-    def members(kind: str, known) -> dict[str, list[str]]:
+    def members(kind: str, defined) -> dict[str, list[str]]:
+        """Every tender position assigned to each pool or plan, priced or not."""
         groups: dict[str, list[str]] = {}
-        for key in lines:
-            assigned_key = assigned.get(key, {}).get(kind)
-            if assigned_key and assigned_key in known:
-                groups.setdefault(assigned_key, []).append(key)
+        for p in sorted(positions, key=lambda p: position_order(p.position)):
+            assigned_key = assigned.get(p.position, {}).get(kind)
+            if assigned_key and assigned_key in defined:
+                groups.setdefault(assigned_key, []).append(p.position)
         return groups
+
+    def member_goods(key: str) -> Decimal | None:
+        """Undiscounted goods value of a member, also for one that is not priced; None when it cannot be known."""
+        if key in goods:
+            return goods[key]
+        if key not in known:
+            return None
+        material, quantity = known[key]
+        price, _ = base_price(material, quantity, scenario, authorities)
+        return None if price is None else round_cents(Decimal(quantity) * price)
 
     pool_share = {key: ZERO for key in lines}
     for pool, keys in members("setup_pool", authorities.pools).items():
         fee, method = authorities.pools[pool]
-        weights = {key: Decimal(lines[key].quantity) * (lines[key].material.allocation_mass_g or ZERO) for key in keys}
-        if any(weight <= 0 for weight in weights.values()):
+        weights = {}
+        for key in keys:
+            material, quantity = (lines[key].material, lines[key].quantity) if key in lines else known.get(key, (None, 0))
+            weights[key] = Decimal(quantity) * ((material.allocation_mass_g if material else None) or ZERO)
+        if any(weight <= 0 for weight in weights.values()):  # a member's share cannot be known: leave it blank
             for key in keys:
-                lines[key].gaps.append("allocation mass")
+                if key in lines:
+                    lines[key].gaps.append("allocation mass")
             continue
         for key, share in allocate_cents(int(round_cents(fee) * 100), weights, method).items():
-            pool_share[key] += share
+            if key in pool_share:
+                pool_share[key] += share
 
     rebate = {key: ZERO for key in lines}
     for plan, keys in members("project_bonus", authorities.bonus).items():
-        eligible = sum((goods[key] for key in keys), ZERO)
+        values = {key: member_goods(key) for key in keys}
+        if any(value is None for value in values.values()):  # a member's goods value is unknown: leave it blank
+            for key in keys:
+                if key in lines:
+                    lines[key].gaps.append(f"project_bonus {plan} member value unknown")
+            continue
+        eligible = sum(values.values(), ZERO)
         credit = ZERO
         for band in authorities.bonus[plan]:
             top = eligible if band.upper is None else min(eligible, band.upper)
             if top > band.lower:
                 credit += (top - band.lower) * band.percent / HUNDRED
-        shares = allocate_cents(int(round_cents(credit) * 100), {key: goods[key] for key in keys})
+        shares = allocate_cents(int(round_cents(credit) * 100), values)
         for key, share in shares.items():
-            rebate[key] += share
+            if key in rebate:
+                rebate[key] += share
 
-    demand: dict[str, int] = {}
-    for line in lines.values():
-        demand[line.material_number] = demand.get(line.material_number, 0) + line.quantity
+    demand: dict[str, int] = {}  # pooled per material over every known position, priced or not (rule 15)
+    for material, quantity in known.values():
+        demand[material.number] = demand.get(material.number, 0) + quantity
 
     for key, line in lines.items():
         material, quantity, keys = line.material, Decimal(line.quantity), assigned.get(key, {})

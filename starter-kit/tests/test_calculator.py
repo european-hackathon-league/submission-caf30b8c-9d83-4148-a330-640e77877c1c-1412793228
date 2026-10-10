@@ -710,6 +710,26 @@ class SharedSetup(Case):
         self.assertMoney(self.line(result, "10").unit_price, "16.00")  # 10.00 + 60.00 / 10
         self.assertMoney(self.line(result, "20").unit_price, "12.00")  # 10.00 + 40.00 / 20
 
+    def test_a_member_that_cannot_be_priced_still_takes_its_share(self):
+        # option A: position 20's material and quantity are known but it has no valid price, so it is omitted; its
+        # 40.00 must not land on position 10, which keeps exactly its own 60.00
+        materials = [material("M-1", allocation_mass_g=D(300)),
+                     material("M-2", allocation_mass_g=D(100), stroke_mm=300, conditions=[])]
+        keys = assigned({"10": {"setup_pool": "POOL-A"}, "20": {"setup_pool": "POOL-A"}})
+        result = bid([pos("10", 10), pos("20", 20, "R-2")], materials, [keys], two_requirements(),
+                     Authorities(pools={"POOL-A": (D("100.00"), "largest_remainder")}))
+        self.assertIn("20", result.omitted)
+        self.assertMoney(self.line(result, "10").unit_price, "16.00")  # 10.00 + 60.00 / 10, not 10.00 + 100.00 / 10
+        self.assertMoney(self.line(result, "10").surcharge_per_unit, "6.00")
+
+    def test_a_member_whose_share_cannot_be_known_leaves_the_fields_blank_rather_than_wrong(self):
+        # position 20 has no matching material at all: its weight is unknown, so the pool share of position 10
+        # cannot be worked out and its surcharge is left blank instead of carrying the whole fee
+        keys = assigned({"10": {"setup_pool": "POOL-A"}, "20": {"setup_pool": "POOL-A"}})
+        result = bid([pos("10", 10), pos("20", 20, "R-2")], [material("M-1", allocation_mass_g=D(300))], [keys],
+                     two_requirements(), Authorities(pools={"POOL-A": (D("100.00"), "largest_remainder")}))
+        self.assertIsNone(self.line(result, "10").surcharge_per_unit)
+
     def three_equal_members(self, method: str) -> list[Decimal]:
         # 100.00 over three equal weights is 33.33 each and one cent over
         keys = assigned({number: {"setup_pool": "POOL-A"} for number in ("10", "20", "30")})
