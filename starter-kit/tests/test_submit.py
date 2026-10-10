@@ -183,8 +183,10 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         with patch.object(llm, "chat_json", script):
             result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
         self.assertIn(("click", 1), tender.done)
-        self.assertIn("PRE-SUBMISSION CHECKLIST: READY", script.turns("submit")[1]["user"])
         self.assertTrue(result["submitted"])
+        # submitting ends the run token: the confirmation is read in code and no further model turn follows
+        self.assertEqual(len(script.turns("submit")), 1)
+        self.assertIn("Total 500.00", result["receipt"])
 
     async def test_final_confirmation_is_blocked_by_an_unfilled_required_control(self):
         script = Script(submit=[{"thought": "", "actions": [{"do": "check_submission"}, {"do": "finalize", "id": 1}]},
