@@ -164,7 +164,10 @@ async def solve(task: dict, playwright) -> dict | None:
     left = contract.seconds_left(task)
     budget = min(left, 20 * 60) if left != float("inf") else 20 * 60  # a scored run has 20 minutes
     hard_stop = started + budget - 45
-    submit_reserve = min(330, budget * 0.3)
+    # The bid form takes ~2 min and the signing code another 1-2 min; a signed partial bid scores, an unsigned
+    # complete one does not. So the investigation ends with 8 minutes left (sandbox test run 54c78c38: 330 s was
+    # too little and the run ended unsigned).
+    submit_reserve = min(480, budget * 0.4)
     investigate_until = hard_stop - submit_reserve
 
     opened, tabs = await open_tabs(playwright, sites)

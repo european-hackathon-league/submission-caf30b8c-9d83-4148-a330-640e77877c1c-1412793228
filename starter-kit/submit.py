@@ -7,6 +7,7 @@ fetches that code when the first one asks for it. Nothing here knows a field nam
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from decimal import Decimal
@@ -134,12 +135,31 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     reference = str(context.get("tender_reference") or bid.tender_reference)
     codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
 
+    # The courier gets a fresh tab in the mailbox's browser (same session), opened now in the background while the
+    # bid form is filled: the investigators' tab can be left half-navigated by the deadline that stopped them, and
+    # a cold mailbox costs minutes when the signing code is waiting (sandbox test run 54c78c38).
+    courier_tab: Tab | None = None
+    warming = None
+    if mail_tab is not None:
+        try:
+            page = await mail_tab.page.context.new_page()
+            courier_tab = Tab(page, {"siteId": mail_tab.site_id, "url": mail_tab.base_url,
+                                     "credentials": mail_tab.credentials})
+            warming = asyncio.ensure_future(courier_tab.goto(courier_tab.base_url + "/"))
+        except Exception:  # noqa: BLE001  no second tab: fall back to the investigators' one
+            courier_tab = mail_tab
+
     async def ask_mail(action: dict) -> str:
         task = str(action.get("task") or "").strip()
         if not task:
             return 'ask_mail needs a "task": say what you need from the mailbox and how to recognise it'
-        if mail_tab is None:
+        if courier_tab is None:
             return "there is no mailbox in this run, so nothing can be fetched by mail"
+        if warming is not None and not warming.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(warming), 20)
+            except Exception:  # noqa: BLE001  the courier opens the page itself then
+                pass
 
         def request() -> str:
             text = f"REQUEST FROM YOUR COLLEAGUE AT THE TENDER PORTAL\n{task}"
@@ -148,9 +168,9 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                          "message)\n" + "\n".join(f"- {code}" for code in codes))
             return text
 
-        system = COURIER.format(site=mail_tab.site_id, url=mail_tab.base_url, reference=reference,
+        system = COURIER.format(site=courier_tab.site_id, url=courier_tab.base_url, reference=reference,
                                 actions=ACTIONS_HELP)
-        courier = Agent("courier", mail_tab, system, request, deadline=min(deadline, time.time() + MAIL_BUDGET),
+        courier = Agent("courier", courier_tab, system, request, deadline=min(deadline, time.time() + MAIL_BUDGET),
                         max_steps=COURIER_STEPS, think=COURIER_THINKS)
         outcome = await courier.run()
         answer = str(outcome.get("answer") or "").strip()
