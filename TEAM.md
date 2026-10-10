@@ -32,7 +32,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| **17:53** | **run_a85be021** | Maria | **main 7ef7411 (merge of the 98.7 branch + main's fixes)** | running | | | | Submission candidate: submit if eligible and ≥ 98.7 |
+| 17:53 | run_a85be021 | Maria | main 7ef7411 (merge of the 98.7 branch + main's fixes) | **0 (unsigned)** | ❌ | 19.6 min | 269 / $0.37 | **The bid it entered scores 100/100 with the calibrated scorer** (all 5 positions incl. 01.03 lead time, total exact), but never signed: the courier rejected the real TAN mail because of a decoy "not sent" preview inside it, the clerk requested a second TAN (voids the first), deadline hit. Fixed in the next commit (courier judges by folder/header, no second TAN request before asking again) |
 | 17:34 | run_faa680e1 | Vamshidhar | pkg 0a714bff | 0 (failed) | ❌ | 18.1 min | 219 / $0.45 | No answer submitted |
 | 17:16 | run_1d8b1f72 | Vamshidhar | pkg 3e4e22e7 | – (failed) | ❌ | 19.7 min | 333 / $0.47 | No answer submitted within the time |
 | **17:04** | **run_60233f96** | Vamshidhar | **b8f3228** (branch codex/robustness-runfix; verified file by file) | **98.7** 🎉 | ✅ | **10.1 min** | 245 / $0.33 | All 5 positions priced; only 01.03 lead time wrong (11.7/13). Total, index check, withdrawn check ✅ |
