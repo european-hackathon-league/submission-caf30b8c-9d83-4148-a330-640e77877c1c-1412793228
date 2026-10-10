@@ -1,0 +1,4 @@
+# EHL Munich 2026 Grand Finale — Cursor Rules (Mandatory)
+# Always read and follow AGENTS.md and .entire/ instructions.
+# Every commit MUST be linked to an Entire session checkpoint (never use --no-verify).
+# Run `entire agent-help` for CLI usage, `entire search "<query>" --json --compact` for prior session memory, `entire graph` for code navigation, and `entire checkpoint list` / `entire checkpoint explain HEAD` to verify checkpoints.
