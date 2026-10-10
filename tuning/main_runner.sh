@@ -2,6 +2,7 @@
 # Runs the current GitHub main in the sandbox, one run at a time, and records the official result.
 #
 #   bash tuning/main_runner.sh [run_id_to_wait_for]
+#   REF=origin/<branch> bash tuning/main_runner.sh      # test a branch instead of main
 #
 # Without an argument: waits until no team run is active, checks out origin/main into a clean worktree (never the
 # working copy, which may hold uncommitted work), scans it for scenario values, starts one test run and waits for it.
@@ -15,21 +16,22 @@ mkdir -p docs/runs/official
 
 run="${1:-}"
 commit="?"
+ref="${REF:-origin/main}"
 if [ -z "$run" ]; then
   for _ in $(seq 1 90); do                      # one at a time: wait for every active team run
     "$A" status 2>&1 | grep -qE " running| in review| in evaluation" || break
     sleep 60
   done
   git fetch -q origin
-  commit=$(git rev-parse --short origin/main)
+  commit=$(git rev-parse --short "$ref")
   dir="../QuoteCraft-packages/pkg-main-$commit"
-  [ -d "$dir" ] || git worktree add -q --detach "$dir" origin/main
+  [ -d "$dir" ] || git worktree add -q --detach "$dir" "$ref"
   if [ -f docs/golden/scenario_terms.txt ] && grep -rnFf docs/golden/scenario_terms.txt "$dir/starter-kit" \
        --include=*.py --include=*.md --include=*.json --include=*.txt --include=*.html --include=*.csv | grep -v uv.lock | head -1 | grep -q .; then
     echo "ABORT: scenario values found in $commit"; exit 2
   fi
   run=$(cd "$dir" && "$A" test-run ./starter-kit 2>&1 | grep -o "run_[0-9a-f]\{16\}" | head -1)
-  echo "started $run on main $commit"
+  echo "started $run on $ref $commit"
 fi
 
 for _ in $(seq 1 45); do
