@@ -437,6 +437,15 @@ class Tab:
             result += f"; logging in again failed: {str(error)[:120]}"
         return "moved to another browser (this one could not load the website): " + result
 
+    async def screenshot(self) -> str | None:
+        """The visible part of the page as a base64 JPEG, for a model that reads images; None when it fails."""
+        try:
+            import base64
+            image = await asyncio.wait_for(self.page.screenshot(type="jpeg", quality=55, full_page=False), 15)
+            return base64.b64encode(image).decode("ascii")
+        except Exception:  # noqa: BLE001
+            return None
+
     async def _on_dialog(self, dialog):
         self.events.append(f'the browser asked "{dialog.message}" ({dialog.type}); it was accepted')
         try:

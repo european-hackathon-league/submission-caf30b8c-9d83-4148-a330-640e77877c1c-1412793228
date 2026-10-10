@@ -81,6 +81,9 @@ def action_fingerprint(actions: list[dict], observation: str = "") -> str:
         stable_actions.append(stable)
     return json.dumps(stable_actions, sort_keys=True)
 
+ESCALATION_LIMIT = 2  # stronger turns per agent: they cost reasoning time and an image
+
+
 class Agent:
     def __init__(self, name: str, tab: Tab, system: str, briefing: Callable[[], str],
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
@@ -103,6 +106,8 @@ class Agent:
         self._circle_hinted = False
         self._circle_hinted_at = -99
         self._circle_hints = 0
+        self._escalate = False
+        self.escalations = 0  # stronger turns given (escalation plugin), at most ESCALATION_LIMIT
         self._stuck = False
         self.circle_hint = circle_hint or (
             "You are going in circles: the same steps keep repeating without progress. The page may already show "
@@ -130,6 +135,22 @@ class Agent:
             messages.append({"role": "assistant", "content": turn["assistant"]})
         messages.append({"role": "user", "content": user})
         return messages
+
+    async def _escalated_turn(self, user: str) -> dict:
+        """One stronger turn for an agent that keeps going in circles: reasoning on, and a screenshot of the page,
+        which shows what the text view can hide (a slider, a disabled button, a banner over the page, a scanned
+        document). The model still decides what to do; nothing about the website is assumed here."""
+        text = (user + "\n\nYOU ARE STUCK: your last steps keep repeating without progress. Look at the screenshot of "
+                "the page as it really is, think about why your steps did not work, and choose a different way. If "
+                "what you need is not reachable from here, finish with done.")
+        messages = self._messages(text)
+        image = await self.tab.screenshot() if hasattr(self.tab, "screenshot") else None
+        if image:
+            messages[-1]["content"] = [{"type": "text", "text": text},
+                                       {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]
+        self.log(f"escalated: reasoning on{', with a screenshot' if image else ', no screenshot available'}")
+        reply = await llm.chat_json(messages, think=True, label=f"{self.name}:escalated")
+        return reply or await llm.chat_json(self._messages(user), think=self.think, label=self.name)
 
     async def _browser(self, action: dict) -> str:
         do, tab = action.get("do"), self.tab
@@ -199,7 +220,12 @@ class Agent:
                     f"CURRENT PAGE\n{page}")
             read_s = time.time() - clock
             clock = time.time()
-            reply = await llm.chat_json(self._messages(user), think=self.think, label=self.name)
+            if self._escalate:
+                self._escalate = False
+                self.escalations += 1
+                reply = await self._escalated_turn(user)
+            else:
+                reply = await llm.chat_json(self._messages(user), think=self.think, label=self.name)
             model_s = time.time() - clock
             clock = time.time()
             actions = reply.get("actions")
@@ -235,6 +261,10 @@ class Agent:
                     self._circle_hinted, self._circle_hinted_at = True, len(recent)
                     self._circle_hints += 1
                     self._circle_hint = self.circle_hint
+                    # The second time: also one stronger turn, reasoning on and with a screenshot (sanity plugin
+                    # "escalation"), before the agent is given up on at the third.
+                    if self._circle_hints == 2 and self.escalations < ESCALATION_LIMIT and sanity.enabled("escalation"):
+                        self._escalate = True
             if circling:
                 final = await llm.chat_json(self._messages(
                     user + "\n\nYou have reached the same conclusion several times in a row. Stop checking and finish "
