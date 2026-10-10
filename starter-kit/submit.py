@@ -12,6 +12,7 @@ import json
 import time
 from decimal import Decimal
 
+import sanity
 from browser_env import Tab
 from calculator import Bid
 from preflight import Report, check as check_review
@@ -142,6 +143,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     "notes"}: `receipt` is the portal's confirmation as the agent read it, empty when there was none.
     """
     reference = str(context.get("tender_reference") or bid.tender_reference)
+    guard = sanity.TypingGuard() if sanity.enabled("typing_guard") else None
     codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
     review: Report | None = None
 
@@ -187,6 +189,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         if not answer:
             return "the mailbox colleague found nothing: " + (outcome.get("summary") or "no result in the time given")
         codes.append(answer)
+        if guard is not None:
+            guard.allow(answer)  # read from the mailbox during the run: the clerk may type it
         return f'the mailbox colleague answers: "{answer}"' + (f' ({outcome["summary"]})' if outcome.get("summary") else "")
 
     async def check_submission(action: dict) -> str:
@@ -213,12 +217,27 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         return text
 
     bidder = {"company": context.get("company"), "vat_id": context.get("vat_id"), "email": context.get("email")}
+    sheet = bid_sheet(bid)
     system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
+<<<<<<< Updated upstream
                           sheet=json.dumps(bid_sheet(bid), ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
     clerk = Agent("submit", tender_tab, system, heading,
                   extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize}, deadline=deadline,
                   max_steps=CLERK_STEPS, think=CLERK_THINKS)
+=======
+                          sheet=json.dumps(sheet, ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
+    if sanity.enabled("no_guessed_mailbox") and not bidder.get("email"):
+        system += ("\nTHE BIDDER'S E-MAIL ADDRESS IS NOT KNOWN YET. If the form asks for it, get it with ask_mail (the "
+                   "mailbox colleague can read the address of the mailbox it has open) and type exactly that. Never "
+                   "make up an address, not even a plausible one.\n")
+    if guard is not None:
+        guard.allow(sheet)
+        guard.allow(bidder)
+        guard.allow(reference)
+    clerk = Agent("submit", tender_tab, system, heading, extra={"ask_mail": ask_mail}, deadline=deadline,
+                  max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=guard)
+>>>>>>> Stashed changes
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")

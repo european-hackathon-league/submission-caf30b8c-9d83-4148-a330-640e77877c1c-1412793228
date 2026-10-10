@@ -23,6 +23,7 @@ import llm
 import run as contract
 from browser_env import Tab
 from calculator import calculate_bid
+import sanity
 import validate
 from casefile import SHAPES, CaseFile, read_context
 from worker import ACTIONS_HELP, Agent
@@ -158,6 +159,7 @@ async def solve(task: dict, playwright) -> dict | None:
     listing = "\n".join(f"- {site['siteId']}: {site['url']}" for site in sites)
     context = await read_context(brief + f"\n\nThe websites of this run:\n{listing}")
     case = CaseFile(brief, context)
+    print(f"Sanity checks on: {', '.join(sanity.active()) or 'none'}", flush=True)
     print(f"Context: tender {case.reference}, scenario {case.scenario.isoformat()}, company {case.company}, "
           f"senders {case.senders}", flush=True)
 
@@ -192,7 +194,9 @@ async def solve(task: dict, playwright) -> dict | None:
         facts = case.inputs()
         bid = calculate_bid(case.reference, case.scenario, facts.governing, facts.positions, facts.clarifications,
                             facts.requirements, facts.materials, facts.authorities, facts.no_material)
-        bid, issues = validate.check(bid, {p.position for p in facts.positions} or None)
+        issues = []
+        if sanity.enabled("validator"):
+            bid, issues = validate.check(bid, {p.position for p in facts.positions} or None)
         if issues:
             print("VALIDATOR: " + " | ".join(issues), flush=True)
         print(f"Investigation took {time.time() - started:.0f} s. {llm.summary()}", flush=True)

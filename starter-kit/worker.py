@@ -57,7 +57,8 @@ class Agent:
     def __init__(self, name: str, tab: Tab, system: str, briefing: Callable[[], str],
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
                  max_steps: int = 80, think: bool = False,
-                 idle: Callable[[str], Awaitable[str | None]] | None = None):
+                 idle: Callable[[str], Awaitable[str | None]] | None = None,
+                 guard: Callable[[dict], str | None] | None = None):
         """`briefing()` heads every turn. `extra` adds actions: name -> handler(action) -> result text.
         `idle("done")` lets the caller hold a finished agent until there is news for it (returns the news) or
         let it stop (returns None)."""
@@ -65,6 +66,7 @@ class Agent:
         self.extra = extra or {}
         self.deadline = deadline or time.time() + 3600
         self.max_steps, self.think, self.idle = max_steps, think, idle
+        self.guard = guard  # a sanity check that may veto a browser action before it runs (sanity.py)
         self.turns: list[dict] = []
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
         self.steps = 0
@@ -189,6 +191,10 @@ class Agent:
                     continue
                 if moved:
                     results.append(f'skipped {json.dumps(action, ensure_ascii=False)[:120]}: the page changed, its ids are stale')
+                    continue
+                veto = self.guard(action) if self.guard else None
+                if veto:
+                    results.append(veto)
                     continue
                 before = self.tab.page.url
                 try:
