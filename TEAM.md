@@ -25,6 +25,8 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 5 | Reliability: one sandbox run at a time; repeat the same commit to measure variance | 70.7 vs 29.1 on the same code | Maria (coordination) |
 | 6 | Calculator latent bugs, edge-case tests, leakage lint, fair-play checklist | Private-dataset safety, review safety | Vamshidhar |
 | 7 | Pitch, cut-off time | | Iga, Ravindra |
+| 8 | **ERP filing is the score driver**: ERP pages filed vs score on the same investigation code: 28 → 100 (2a95ffc9), 6 → 38.2 (2cdb6477), 2 → 10 (e3804980). Local tests start from a complete golden case file, so they never see this | Investigators must file every candidate (matching is code), and slow loops must be caught | 🟨 Maria, branch `maria/erp-loop-fixes` (8fda362): circle detection over 16 turns + investigator hint + "file every candidate" rule; 295 tests OK, golden exact; needs a sandbox run |
+| 9 | Work on branches, not main | Pushing to main got in the way of the other builders | Everyone; merge to main only when agreed |
 
 ## Score log (every sandbox run, newest first)
 
@@ -32,7 +34,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 18:55 | run_e3804980 | Maria | **main 33c04d7** (clean checkout) | **10** | ✅ | 13.1 min | 224 / $0.27 | Signed (TAN worked), but **empty bid**: ERP found only 2 of 5 materials and no prices. The ERP agent spent ~45 turns waiting for the spec, then **looped 46 turns** on "HZ-2170 has stroke 500, not 507" (A-2 is 500 in the case file; 507 was misread). The loop repeats every ~6 turns, so even eb1a794's circle detector (1- or 2-turn repeats) would miss it |
+| ~19:55 | run_74b22ceb | Maria | main 1fab415 (= eb1a794 code: courier fixes, circle detection) | running | | | | Main runner; result recorded when it finishes |
+| 18:55 | run_e3804980 | Maria | **main 33c04d7** (clean checkout) | **10** | ✅ | 13.1 min | 224 / $0.27 | Signed (TAN worked), but **empty bid**: the ERP agent filed only 2 pages. It searched blind for ~45 turns while waiting for the spec, then **rejected the right A-2 material for 46 turns** ("stroke 500, not 507": the customer portal's 507 predated the Q&A amendment; the case file said 500) and never filed it, so the calculator had nothing to match. Investigation code is identical to the 100 run (only submit.py differs): this is run-to-run variance. Fix on branch maria/erp-loop-fixes (8fda362) |
 | 18:38 | **sub_4c6ef121 (SUBMISSION)** → run_2cdb6477 | Maria | **2d330db** (identical to the 100 package) | **38.2** | ✅ | 17.7 min | 435 / $0.69 | Review **passed** ✅. Same code as the 100 run, yet only 01.01 (10.4) and 01.05 (7.8) partly priced; 01.02-01.04 missing; total, consistency and index check 0. **100 vs 38.2 on identical code: reliability is the problem** |
 | **18:18** | **run_2a95ffc9** | Vamshidhar | **2d330db** (main; verified file by file) | **100** 🎉 | ✅ | **12.4 min** | 302 / $0.36 | All 5 positions perfect, signed |
 | 17:57 | run_73e5cf95 | Vamshidhar | pkg 2ede98ed | 0 (failed) | ❌ | 19.6 min | 254 / $0.31 | No answer submitted |
