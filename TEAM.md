@@ -89,8 +89,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 20:53 | **sub_ce82715c (SUBMISSION, Vamshidhar)** → run_6baaba90 | Vamshidhar | **v1** (package 47e1f6ce, same as 44a626ef) | **100** 🎉 | ✅ | 11.0 min | 237 / $0.28 | Review **passed** ✅: the latest passed submission, i.e. **our final package**. **v1 reproduced: 2 of 2 clean runs at 100** (9.6 and 11.0 min) |
 | 20:52 | run_143ae323 | Vamshidhar | ? | running | | | | |
-| 20:50 | run_64397a5e | Maria | branch `maria/erp-loop-fixes` 9ba31c0 (same starter-kit as 5ee465a) | running | | | | **Reproducibility check** of the branch-and-bound winner (passes both local bounds; 100 in 10.3 min in 2b8b5ca8). Test run only, no submission |
+| 20:50 | run_64397a5e | Maria | branch `maria/erp-loop-fixes` 9ba31c0 (same starter-kit as 5ee465a) | **0 (no answer)** | ❌ | 21.1 min | 51 / – | **Infrastructure, not code:** only 51 calls in 21 min, 10 model calls without reply, 3 pages not loading; the Atira API itself was briefly unreachable at the time (proxy: ENOTFOUND ehl-challenge.atira.ai). Ran with 5 team runs active. Not a reproducibility result |
 | 20:50 | run_c593918d | Vamshidhar | ? | running | | | | |
 | 20:50 | run_cf7ab2ec | Vamshidhar | ? | running | | | | |
 | 20:41 | run_5f6f9d65 | Vamshidhar | ? | running | | | | |
