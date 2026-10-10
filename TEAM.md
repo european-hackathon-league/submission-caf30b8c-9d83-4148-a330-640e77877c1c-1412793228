@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 16:45.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 17:10.
 
 ## Owners
 
@@ -46,7 +46,7 @@ Brief -> 4 site agents in parallel -> case file (evidence) -> calculator -> vali
 | Stage | Module | Done when | Status |
 |---|---|---|---|
 | Brief reader | `casefile.read_context` | Tender, scenario date, company, VAT id and authorised senders come from the run brief, never from code | ✅ |
-| Page renderer | `browser_env.Tab.observe` | Pages read as a human sees them (labels, tooltips, collapsed sections, frames); hidden decoys and invisible characters dropped | 🟨 works on all four sites; 8 regression tests in `test_browser_env.py` fail |
+| Page renderer | `browser_env.Tab.observe` | Pages read as a human sees them (labels, tooltips, collapsed sections, frames); hidden decoys and invisible characters dropped | ✅ works on all four sites; all regression tests in `test_browser_env.py` pass (since 277bf35) |
 | Helpers | `browser_env`, `worker` actions | Popups, access checks (incl. several per page), errors, expired sessions, paging, file downloads | 🟨 mail access-check loop fixed; section toggles clickable |
 | Site agents | `agent.py` + `worker.Agent` | The model decides where to go; each agent finishes its site in < 5 min | 🟨 ~14 min for all four; Q&A coverage open |
 | Case file | `casefile.CaseFile` | Facts with provenance; exact reference, authorised sender, latest record no later than the scenario date | ✅ picks the right records on our reference data; failed extractions are now retried |
