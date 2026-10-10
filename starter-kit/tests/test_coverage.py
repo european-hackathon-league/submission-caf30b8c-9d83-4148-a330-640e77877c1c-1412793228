@@ -106,6 +106,8 @@ class FakeTab:
         return []
 
     async def fill(self, aid, text, enter=False):
+        if text == "refused":  # the field keeps its old content
+            return f'filled [{aid}]; BUT the field now holds "{self.query}", not what was typed'
         self.query = text
         return f"filled [{aid}]"
 
@@ -154,6 +156,13 @@ class InTheAgentLoop(unittest.IsolatedAsyncioTestCase):
         self.assertIn("question discount closed as absent", asked[4])
         self.assertEqual(closed, [("discount", "absent")])
         self.assertEqual(list(agent.coverage.views), ["http://site.test/inbox", "http://site.test/archive"])
+
+    async def test_a_text_the_field_did_not_keep_is_not_recorded_as_searched(self):
+        agent, _, _ = await self.run_agent([
+            self.turn({"do": "fill", "id": 1, "text": "T-0001", "enter": True}),
+            self.turn({"do": "fill", "id": 1, "text": "refused", "enter": True}),
+            self.turn({"do": "done", "summary": "finished"})])
+        self.assertEqual([text for _, text in agent.coverage.queries], ["T-0001"])
 
     async def test_complete_is_held_back_while_a_collected_list_is_cut_short(self):
         complete = {"do": "answer", "question": "clarifications", "status": "complete", "note": "all pages"}

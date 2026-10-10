@@ -16,6 +16,8 @@ from urllib.parse import urljoin, urlparse
 
 from sanity import same_value
 
+NOT_KEPT = "BUT the field now holds"  # how `fill` reports a field that did not keep what was typed
+
 # Renders one document. Returns {text, next}: `text` with ⟦FRAME:n⟧ markers where embedded documents go, `next` the
 # first unused element id. Every control gets data-aid="<id>" so it can be found again.
 SNAPSHOT_JS = r"""
@@ -537,7 +539,7 @@ class Tab:
             return ""
         if same_value(wanted, shown):
             return f'; the field shows it as "{shown[:80]}"'
-        return (f'; BUT the field now holds "{shown[:80]}", not what was typed: it changed or refused the value. '
+        return (f'; {NOT_KEPT} "{shown[:80]}", not what was typed: it changed or refused the value. '
                 "Read the field's hint and correct it before you move on")
 
     async def select(self, aid, value: str) -> str:
