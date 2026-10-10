@@ -164,6 +164,29 @@ def _strip_physical_only_stock(text: str, data: dict | None) -> str:
             "breakdown to find and file freely available stock") if stripped else ""
 
 
+def _dedup_collected_pages(pages: list[str]) -> list[str]:
+    """Strip contiguous blocks (>= 6 lines) from collected page i that already appeared in page i-1."""
+    if len(pages) <= 1:
+        return pages
+    import difflib
+    norm = lambda line: re.sub(r"\[\d+\]\s*", "", line).strip()
+    out = [pages[0]]
+    for prev, curr in zip(pages, pages[1:]):
+        prev_lines = prev.splitlines()
+        curr_lines = curr.splitlines()
+        prev_norm = [norm(line) for line in prev_lines]
+        curr_norm = [norm(line) for line in curr_lines]
+        drop: set[int] = set()
+        for match in difflib.SequenceMatcher(None, prev_norm, curr_norm, autojunk=False).get_matching_blocks():
+            if match.size >= 6:
+                for idx in range(max(8, match.b), match.b + match.size):
+                    drop.add(idx)
+        kept = [line for idx, line in enumerate(curr_lines) if idx not in drop]
+        trimmed = "\n".join(kept).strip()
+        out.append(trimmed if len(kept) >= 10 and len(trimmed) >= 40 else curr)
+    return out
+
+
 def _unit_is_set(unit) -> bool | None:
     """Classify only explicit, familiar piece/set unit labels; never guess from quantity or wording context."""
     value = _text(unit)
@@ -308,7 +331,8 @@ class CaseFile:
         if len(text.strip()) < 20:
             return "there is no document to file"
         # The pages of a collected list are read side by side: shorter replies, sooner.
-        pages = [page for page in re.split(re.escape(PAGE_BREAK) + r" \d+ =====\n", text) if len(page.strip()) >= 20]
+        raw_pages = [page for page in re.split(re.escape(PAGE_BREAK) + r" \d+ =====\n", text) if len(page.strip()) >= 20]
+        pages = _dedup_collected_pages(raw_pages)
         folder = os.environ.get("AGENT_DOCS_DIR")
         if folder:
             os.makedirs(folder, exist_ok=True)

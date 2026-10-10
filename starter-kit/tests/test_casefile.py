@@ -532,7 +532,22 @@ class AnswerGuardsAndLifecycle(unittest.TestCase):
         self.assertEqual(note2, "")
         self.assertEqual(loc_data["materials"][0].get("free_stock"), 29)
 
+    def test_dedup_collected_pages_strips_repeated_prefix_from_growing_load_more_pages(self):
+        from casefile import _dedup_collected_pages
+        header = "\n".join(f"header line {i}" for i in range(1, 9))
+        card1 = "\n".join(f"[1{i}] answer A-101 line {i}" for i in range(1, 9))
+        card2 = "\n".join(f"[2{i}] answer A-102 line {i}" for i in range(1, 9))
+        page1 = f"{header}\n3 of 6 shown\n{card1}\n[30] button \"Load more\""
+        page2 = f"{header}\n6 of 6 shown\n{card1}\n{card2}\nEnd of list"
+        deduped = _dedup_collected_pages([page1, page2])
+        self.assertEqual(len(deduped), 2)
+        self.assertIn("answer A-101 line 1", deduped[0])
+        self.assertNotIn("answer A-101 line 1", deduped[1])
+        self.assertIn("answer A-102 line 1", deduped[1])
+        self.assertIn("header line 1", deduped[1])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
