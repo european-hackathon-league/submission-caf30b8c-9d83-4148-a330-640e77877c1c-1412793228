@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "atira": {
+      "command": "C:\\Users\\vamsh\\AppData\\Local\\atira\\bin\\atira.cmd",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

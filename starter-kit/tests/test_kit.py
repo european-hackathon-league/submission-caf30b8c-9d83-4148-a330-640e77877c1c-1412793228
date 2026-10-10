@@ -176,7 +176,8 @@ class TheEntryPoint(Case):
             return answer
 
         out = io.StringIO()
-        with patch.dict(os.environ, environment, clear=True), patch.object(browsers, "connect", connect), \
+        env = {"SystemRoot": os.environ["SystemRoot"], **environment} if "SystemRoot" in os.environ else environment
+        with patch.dict(os.environ, env, clear=True), patch.object(browsers, "connect", connect), \
                 patch.object(agent, "solve", solve), redirect_stdout(out):
             code = await agent.main()
         return code, out.getvalue()
