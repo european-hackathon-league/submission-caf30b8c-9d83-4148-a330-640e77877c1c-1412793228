@@ -30,6 +30,23 @@ Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568b
 | 10 | **Speed: stuck investigators** (100 run 74b22ceb took 19.3 of 20 min) | The tender-portal agent opened the same unchanged page 122× (~8 min); the investigation waits for every agent, so it ran to its time limit. Without the loop it would have ended around min 4-5 | 🟨 Maria, branch `maria/erp-loop-fixes` 76db483: a stuck investigator is sent idle (6 identical rounds, or circling after 2 hints) and woken by news; 296 tests OK; needs a sandbox run |
 | 9 | Work on branches, not main | Pushing to main got in the way of the other builders | Everyone; merge to main only when agreed |
 
+## The five 100 runs compared (20:20 UTC)
+
+| Run | Who / code | Total | Investigation | Bid + TAN | Calls / cost | Model timeouts | Looping agent |
+|---|---|---|---|---|---|---|---|
+| 44a626ef | Vamshidhar, v1 | **9.6 min** | **319 s** | 254 s | 249 / $0.30 | 0 | none: every agent finished by itself |
+| 2a95ffc9 | Vamshidhar, 2d330db | 12.4 min | 500 s | 243 s | 302 / $0.36 | 2 | none (erp 6×, mail 5×) |
+| 39437db1 | Vamshidhar, a956103b | 15.3 min | 677 s (limit) | 239 s | 307 / $0.43 | 7 | tender portal 36× |
+| fdb670b8 | Maria, branch c9186c3 | 16.2 min | 684 s (limit) | 289 s | 268 / $0.33 | 15 | tender portal 22×, never finished |
+| 74b22ceb | Maria, main 1fab415 | 19.3 min | 676 s (limit) | 479 s | 394 / $0.47 | 0 | tender portal 122×, courier 10× |
+
+**What decides the time is the investigation, and what decides the investigation is whether one agent loops.** Bid + TAN is
+steady at ~4 min in every run except one (courier loop). The investigation waits for every agent, so a single looping
+agent (almost always the tender portal, re-checking work it has already done) keeps it running to its ~680 s limit;
+without a loop it ends after 5-8 min. Model timeouts add to it (more of them when many team runs are active).
+So the speed work is: no agent may loop (branch `maria/erp-loop-fixes`: stuck agents are sent idle; v1's routing
+tells agents to finish when their own questions are done).
+
 ## Score log (every sandbox run, newest first)
 
 Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official quality (0-100).
