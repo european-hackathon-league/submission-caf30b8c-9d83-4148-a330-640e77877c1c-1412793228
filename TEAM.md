@@ -33,7 +33,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
 | 18:55 | run_e3804980 | Maria | **main 33c04d7** (clean checkout) | running | | | | Test of main as it is on GitHub; the main runner records the result |
-| 18:38 | **sub_4c6ef121 (SUBMISSION)** → run_2cdb6477 | Maria | **2d330db** (identical to the 100 package) | running (review **passed** ✅) | | | | First submission. The AI fair-play review accepted the model-directed design |
+| 18:38 | **sub_4c6ef121 (SUBMISSION)** → run_2cdb6477 | Maria | **2d330db** (identical to the 100 package) | **38.2** | ✅ | 17.7 min | 435 / $0.69 | Review **passed** ✅. Same code as the 100 run, yet only 01.01 (10.4) and 01.05 (7.8) partly priced; 01.02-01.04 missing; total, consistency and index check 0. **100 vs 38.2 on identical code: reliability is the problem** |
 | **18:18** | **run_2a95ffc9** | Vamshidhar | **2d330db** (main; verified file by file) | **100** 🎉 | ✅ | **12.4 min** | 302 / $0.36 | All 5 positions perfect, signed |
 | 17:57 | run_73e5cf95 | Vamshidhar | pkg 2ede98ed | 0 (failed) | ❌ | 19.6 min | 254 / $0.31 | No answer submitted |
 | 17:52 | run_7b2c0cf9 | Vamshidhar | pkg 363ab793 | – (cancelled) | ❌ | 7.6 min | 126 / $0.16 | Cancelled by Vamshidhar |
@@ -52,9 +52,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | 14:31 | run_78004a51 | Maria | 7e7096b | – | ❌ | cancelled | 141 / $0.18 | Tender agent hung, run frozen |
 | 12:20 | run_f06e3fcf | Vamshidhar | 37a4414 (script) | 100 | ✅ | 16 s | 0 / $0 | Fixed script, no model calls: **not submittable** (fair play) |
 
-Leaderboard for comparison (17:37 UTC): **isar-labs 100 in 7:19 min / $0.10**, AdminRights 100 in 17:57 / $0.24, Here for the Memes 53.8. Earlier leader: 21.5 (13:00, 14:34). **We have no submission yet.**
+Leaderboard (19:00 UTC): isar-labs **100 in 6:22 / $0.09**, AdminRights 100 in 17:57, PolyETHylen 100 in 14:54, EliTUM 68.8. **Our first submission: 38.2.** Earlier (17:37 UTC): **isar-labs 100 in 7:19 min / $0.10**, AdminRights 100 in 17:57 / $0.24, Here for the Memes 53.8. Earlier leader: 21.5 (13:00, 14:34). **We have no submission yet.**
 
-**Spread so far (model-directed agent):** **100** · 98.7 · 70.7 · 70.7 · 29.1 · 27.8 · 22.8 · 10 · 10 · 0 · 0 · 0 (failed/unsigned). Best and median are far apart.
+**Spread so far (model-directed agent):** **100** · 98.7 · 38.2 (submission) · 70.7 · 70.7 · 29.1 · 27.8 · 22.8 · 10 · 10 · 0 · 0 · 0 (failed/unsigned). Best and median are far apart.
 
 **From now on:** `tuning/main_runner.sh` runs the current GitHub main in a clean checkout, one run at a time, and records each official result (docs/runs/main_runs.tsv), so reliability is measured per version, not just the best run.
 
