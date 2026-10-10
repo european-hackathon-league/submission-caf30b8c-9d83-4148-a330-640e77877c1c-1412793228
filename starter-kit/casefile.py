@@ -223,6 +223,9 @@ class CaseFile:
                                        think=True, max_tokens=8000, label=f"extract:{kind}",
                                        provider=os.environ.get("EXTRACT_PROVIDER", "qwen"))
             summary = self.merge(kind, data) if data else "the extraction failed; file the document again"
+            if data and summary == "nothing usable was found in it":
+                data = None
+                summary = "no usable records were extracted; check the evidence and file it again"
             if data:
                 self.evidence.append({"id": digest, "kind": kind, "source": source, "agent": agent,
                                       "summary": summary, "extracted": data})
@@ -549,6 +552,8 @@ class CaseFile:
             return 'status must be "complete" or "absent"'
         if self.pending:
             return "facts from documents you filed are still being extracted; wait for them, then answer"
+        if question == "clarifications" and status == "complete" and not self.clarifications:
+            return "no Q&A answers have been extracted yet; reopen the Q&A evidence, file it as clarifications, and wait for the extraction result"
         if question.startswith("material:") and status == "absent":
             facts = self.inputs()
             answers = active_clarifications(facts.clarifications, self.scenario)
