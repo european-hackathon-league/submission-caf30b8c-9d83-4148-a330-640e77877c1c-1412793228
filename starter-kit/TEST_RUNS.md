@@ -6,7 +6,7 @@ easy to reconnect later.
 
 | Started (Berlin) | Commit | Run ID | Hypothesis / change | Result and follow-up |
 | --- | --- | --- | --- | --- |
-| _pending first robustness rehearsal_ | | | Action state verification and extraction schema gate improve recovery without hardcoded portal knowledge. | |
+| 2026-10-10 | `024f8b3` | `run_3c3568bb65f5871e` (`reh_3462880dc545db9e`) | Baseline after action state verification, extraction schema gate, pre-submit review, and recovery safeguards. | Queued; inspect live logs and score before choosing the next variant. |
 
 Use `atira status` to find a run ID, `atira logs <run-id> --follow` for its
 console trace, and `atira package <run-id>` to inspect exactly what the sandbox
