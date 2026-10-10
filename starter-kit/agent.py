@@ -66,17 +66,15 @@ MAIL_SEARCH_TOPICS = [
 ]
 
 
-async def ask_llm_json(prompt: str, system: str = "Return ONLY valid JSON without markdown fences.") -> dict[str, Any]:
+async def ask_llm_json(
+    prompt: str,
+    system: str = "Respond concisely with ONLY a single-line valid JSON object, no markdown fences and no explanation.",
+) -> dict[str, Any]:
     """Query Qwen (`qwen3.8-flash-next`) and parse a JSON object response safely."""
     if not os.environ.get("QWEN_BASE_URL") and not os.environ.get("QWEN_API_KEY"):
         return {}
     try:
-        raw = await models.ask_qwen(
-            prompt,
-            system=system,
-            temperature=0.0,
-            max_tokens=600,
-        )
+        raw = await models.ask_qwen(f"{system}\n\n{prompt}")
         if not raw:
             return {}
         cleaned = raw.strip()
