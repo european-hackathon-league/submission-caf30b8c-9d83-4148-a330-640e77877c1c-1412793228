@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 18:00.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 18:30.
 
 ## Owners
 
@@ -10,6 +10,21 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026,
 | Builder 2: coverage | Puneetha | Why the bidder Q&A answers, the end reserves (technical release mail) and the metal index (price-index mail) stay unanswered; fixes in the prompts and `casefile.py` | All 5 positions priced in a local run |
 | Builder 3: tests / QA | Vamshidhar | Calculator edge-case tests, the latent calculator bugs, the failing `test_browser_env` tests, fair-play check before every submit | Test suite green, latent bugs fixed |
 | Pitch & story | Iga, Ravindra | Pitch skeleton, 2-minute story, likely jury questions; organiser questions (pitch format, submission cut-off time) | Draft ready for team review |
+
+## Current priorities (18:30)
+
+Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568bb); the same code also scored 29.1
+(run 9c8fe292). So the work now is the last position **and** making good runs the normal case.
+
+| # | What | Why | Owner |
+|---|---|---|---|
+| 1 | Position 01.01 omitted with "set size unknown" | ~28 points in the good runs (position 13 + total 5 + consistency 5 + index check 5) | Puneetha |
+| 2 | Metal-index rate: the one whose validity window contains the scenario date | Run 9c8fe292 used a wrong rate: surcharge, unit price and rebate wrong | Maria |
+| 3 | Position 01.03 lead time 1 instead of 11 (shared stock + delivery commitment ceiling) | 1.3 points; the calculator is correct on correct facts, so a fact is wrong | Maria |
+| 4 | Submit agent stops right after the final submit click | After submitting, the run token is dead: the extra model calls fail ("expired/unknown token") and cost time | Maria |
+| 5 | Reliability: one sandbox run at a time; repeat the same commit to measure variance | 70.7 vs 29.1 on the same code | Maria (coordination) |
+| 6 | Calculator latent bugs, edge-case tests, leakage lint, fair-play checklist | Private-dataset safety, review safety | Vamshidhar |
+| 7 | Pitch, cut-off time | | Iga, Ravindra |
 
 ## Success levels
 
