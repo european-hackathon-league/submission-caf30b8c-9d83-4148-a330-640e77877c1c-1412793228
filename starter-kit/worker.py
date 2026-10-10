@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from typing import Awaitable, Callable
 
 import llm
 from browser_env import Tab
 
-ACTIONS_HELP = """Reply with ONE JSON object: {"thought": "<short reasoning>", "actions": [ ... ]}.
+ACTIONS_HELP = """Reply with ONE JSON object: {"thought": "<one or two short sentences: what the page tells you and what you do next>", "actions": [ ... ]}.
 The actions run in order. Once an action loads another page the rest of the list is dropped, because the element
 ids change with every page: chain actions only while you stay on the page (fill fields, tick boxes, then click).
 Elements you can act on carry an id like [12].
@@ -29,8 +30,8 @@ Browser actions:
   {"do": "back"}    {"do": "reload"}
   {"do": "collect", "id": 12, "max_pages": 10}     [12] is the next-page or load-more control of a list or paged document you want in full: it is followed until the end and all pages come back as one document
   {"do": "fetch", "id": 12}                        download the file behind link [12] (archive, CSV, PDF, text) and read it as a document
-  {"do": "wait"}                                   nothing to do right now
-  {"do": "done", "summary": "...", "answer": "..."}   you are finished; "answer" only when you were asked for one
+  {"do": "wait"}                                   pause two seconds, for a page that is still loading
+  {"do": "done", "summary": "<ten words>", "answer": "..."}   you are finished; "answer" only when you were asked for one
 
 Reading the page:
 - It is rendered as a screen reader would read it. "(described: ...)" and "(tooltip: ...)" hold text that only
@@ -50,11 +51,11 @@ NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch"}
 class Agent:
     def __init__(self, name: str, tab: Tab, system: str, briefing: Callable[[], str],
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
-                 max_steps: int = 80, think: bool = True,
+                 max_steps: int = 80, think: bool = False,
                  idle: Callable[[str], Awaitable[str | None]] | None = None):
         """`briefing()` heads every turn. `extra` adds actions: name -> handler(action) -> result text.
-        `idle("wait" | "done")` lets the caller hold the agent until there is news (returns the news) or let it
-        stop (returns None)."""
+        `idle("done")` lets the caller hold a finished agent until there is news for it (returns the news) or
+        let it stop (returns None)."""
         self.name, self.tab, self.system, self.briefing = name, tab, system, briefing
         self.extra = extra or {}
         self.deadline = deadline or time.time() + 3600
@@ -62,13 +63,14 @@ class Agent:
         self.turns: list[dict] = []
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
         self.steps = 0
+        self.started = time.time()
 
     def document(self) -> tuple[str, str]:
         """What the agent is looking at: the document it collected or fetched, else the page as last read."""
         return self.held or (self.tab.document, self.tab.document_source)
 
     def log(self, text: str) -> None:
-        print(f"[{self.name} {self.steps:02d}] {text}", flush=True)
+        print(f"[{self.name} {self.steps:02d} t+{time.time() - self.started:.0f}s] {text}", flush=True)
 
     def _messages(self, user: str) -> list[dict]:
         messages = [{"role": "system", "content": self.system}]
@@ -117,6 +119,7 @@ class Agent:
         repeats, last_signature, failures = 0, "", 0
         while self.steps < self.max_steps and time.time() < self.deadline:
             self.steps += 1
+            clock = time.time()
             try:
                 page = await self.tab.observe()
             except Exception as error:  # noqa: BLE001
@@ -126,7 +129,11 @@ class Agent:
             left = int(self.deadline - time.time())
             user = (f"{self.briefing()}\n\nTIME LEFT: {left} s\n\nRESULTS OF YOUR LAST ACTIONS\n{done_text}\n\n"
                     f"CURRENT PAGE\n{page}")
+            read_s = time.time() - clock
+            clock = time.time()
             reply = await llm.chat_json(self._messages(user), think=self.think, label=self.name)
+            model_s = time.time() - clock
+            clock = time.time()
             actions = reply.get("actions")
             if isinstance(actions, dict):
                 actions = [actions]
@@ -142,6 +149,10 @@ class Agent:
             head = page.split("\n", 2)
             short = f"RESULTS OF YOUR LAST ACTIONS\n{done_text[:700]}\n\nPAGE (text dropped)\n" + "\n".join(head[:2])
             self.turns.append({"user": user, "short": short, "assistant": json.dumps(reply, ensure_ascii=False)})
+            if os.environ.get("AGENT_TRACE"):  # what the agent saw and answered, one file per turn
+                os.makedirs(os.environ["AGENT_TRACE"], exist_ok=True)
+                with open(os.path.join(os.environ["AGENT_TRACE"], f"{self.name}_{self.steps:03d}.txt"), "w", encoding="utf-8") as handle:
+                    handle.write(user + "\n\n===== REPLY =====\n" + json.dumps(reply, ensure_ascii=False, indent=1))
 
             signature = json.dumps(actions, sort_keys=True) + self.tab.page.url
             repeats = repeats + 1 if signature == last_signature else 0
@@ -156,10 +167,8 @@ class Agent:
                     finished = action
                     break
                 if do == "wait":
-                    news = await self.idle("wait") if self.idle else None
-                    if news is None and not self.idle:
-                        await asyncio.sleep(2)
-                    results.append(news or "waited")
+                    await asyncio.sleep(2)
+                    results.append("waited two seconds")
                     continue
                 if do in self.extra:
                     try:
@@ -182,7 +191,8 @@ class Agent:
                     self.held = None
                 if do in NAVIGATING or self.tab.page.url != before or not await self._alive():
                     moved = True
-            self.log(f"{thought} | {json.dumps(actions, ensure_ascii=False)[:400]} | " + " ; ".join(r[:160] for r in results))
+            self.log(f"(read {read_s:.1f}s, model {model_s:.1f}s, act {time.time() - clock:.1f}s) {thought} | "
+                     f"{json.dumps(actions, ensure_ascii=False)[:400]} | " + " ; ".join(r[:160] for r in results))
             if repeats >= 2:
                 results.append("You have sent the same actions three times with the same result. Do something "
                                "different, or finish with done.")

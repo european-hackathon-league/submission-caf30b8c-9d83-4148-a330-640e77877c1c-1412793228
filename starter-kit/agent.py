@@ -63,7 +63,9 @@ How to work
   references, senders and status marks before you rely on a record, and follow the brief's rules on which one
   counts. When in doubt, file both and let the facts decide.
 - Follow the search hints a website gives. If a search returns nothing or too much, change the search terms.
-- When no open question is left for your website, finish with done. You are called again if new questions arise.
+- When no open question is left that your website can answer right now, finish with done, also when you need
+  facts the other agents have not filed yet. You are called again as soon as the case file brings new questions.
+  Never idle with wait and never browse around to pass the time.
 """
 
 
@@ -79,9 +81,6 @@ class Team:
     def hook(self, name: str):
         async def hold(why: str) -> str | None:
             version = self.case.version
-            if why == "wait":
-                await self.case.wait_change(version, 12)
-                return "the case file changed" if self.case.version != version else "nothing new yet"
             before = {qid for qid, _ in self.case.questions()}
             self.idle.add(name)
             try:

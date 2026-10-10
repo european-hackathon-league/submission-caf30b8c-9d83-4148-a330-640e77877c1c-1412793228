@@ -220,6 +220,8 @@ LOGIN_JS = r"""
 """
 
 MAX_OBSERVATION = 14000
+UNREADABLE = "(this document could not be read"
+PAGE_BREAK = "===== collected page"  # between the pages of a list or document that `collect` followed to its end
 
 
 class _Text(HTMLParser):
@@ -296,8 +298,12 @@ class Tab:
         self.document_source = ""
         self.events: list[str] = []
         self.bad_status = 0
+        self.loading: set = set()  # page, frame and data requests that have not come back yet
         page.on("dialog", lambda dialog: asyncio.ensure_future(self._on_dialog(dialog)))
         page.on("response", self._on_response)
+        page.on("request", lambda request: self.loading.add(request) if request.resource_type in ("document", "xhr", "fetch") else None)
+        page.on("requestfinished", lambda request: self.loading.discard(request))
+        page.on("requestfailed", lambda request: self.loading.discard(request))
 
     async def _on_dialog(self, dialog):
         self.events.append(f'the browser asked "{dialog.message}" ({dialog.type}); it was accepted')
@@ -314,16 +320,25 @@ class Tab:
             pass
 
     async def settle(self):
-        await asyncio.sleep(0.12)  # let a click start its navigation, in the page or in an embedded frame
+        """Wait until the page, its frames and the data they fetch have arrived and nothing more is on its way."""
+        loop = asyncio.get_running_loop()
+        end, quiet = loop.time() + 12, None
+        await asyncio.sleep(0.1)  # let a click start its request
+        while loop.time() < end:
+            if self.loading:
+                quiet = None
+            elif quiet is None:
+                quiet = loop.time()
+            elif loop.time() - quiet >= 0.2:
+                break
+            await asyncio.sleep(0.04)
+        else:
+            self.loading.clear()  # a request that never ends must not hold up every later step
         for frame in list(self.page.frames):
             try:
-                await frame.wait_for_load_state("domcontentloaded", timeout=15000 if frame == self.page.main_frame else 5000)
+                await frame.wait_for_load_state("domcontentloaded", timeout=8000 if frame == self.page.main_frame else 3000)
             except Exception:  # noqa: BLE001
                 pass
-        try:
-            await self.page.wait_for_load_state("networkidle", timeout=2500)
-        except Exception:  # noqa: BLE001
-            pass
         for _ in range(3):  # a server error page: retry the same address, as a person would press reload
             if not self.bad_status:
                 break
@@ -338,16 +353,12 @@ class Tab:
         try:
             prepared = await frame.evaluate(PREPARE_JS)
             if prepared["opened"]:
-                await asyncio.sleep(0.15)  # lazy content of the sections just opened
-                try:
-                    await self.page.wait_for_load_state("networkidle", timeout=2000)
-                except Exception:  # noqa: BLE001
-                    pass
+                await self.settle()  # lazy content of the sections just opened
             for name in prepared["closed"]:
                 self.events.append(f'closed the popup "{name}"')
             shot = await frame.evaluate(SNAPSHOT_JS, start)
         except Exception as error:  # noqa: BLE001
-            return f"(this document could not be read: {str(error)[:120]})", start
+            return f"{UNREADABLE}: {str(error)[:120]})", start
         self.frames.append((start, shot["next"], frame))
         text, following = shot["text"], shot["next"]
         for marker in re.findall(r"⟦FRAME:(\d+)⟧", text):
@@ -379,16 +390,19 @@ class Tab:
 
     async def read(self) -> str:
         """The current page as text, with fresh element ids."""
-        await self.settle()
-        self.frames = []
-        text, _ = await self._frame_text(self.page.main_frame, 1, 0)
+        for _ in range(4):  # a page that navigates while it is read is read again
+            await self.settle()
+            self.frames = []
+            text, _ = await self._frame_text(self.page.main_frame, 1, 0)
+            if not text.startswith(UNREADABLE):
+                break
         try:
             title = await self.page.title()
         except Exception:  # noqa: BLE001
             title = ""
-        self.document = clean_text(text)
+        self.document = f"url: {self.page.url}\ntitle: {clean_text(title)}\n{clean_text(text)}"
         self.document_source = self.page.url
-        return f"url: {self.page.url}\ntitle: {clean_text(title)}\n{self.document}"
+        return self.document
 
     async def observe(self) -> str:
         text = await self.read()
@@ -593,7 +607,7 @@ class Tab:
         if grows:  # a "load more" control: the last page holds every row
             self.document = pages[-1]
             return f'followed "{info["name"]}" {len(pages) - 1} time(s); the list is now complete on the page'
-        self.document = "\n".join(f"===== page {number} of the collected list =====\n{page}" for number, page in enumerate(pages, 1))
+        self.document = "\n".join(f"{PAGE_BREAK} {number} =====\n{page}" for number, page in enumerate(pages, 1))
         return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one. COLLECTED DOCUMENT '
                 f"(file it with keep if it is relevant):\n{without_ids(self.document)[:MAX_OBSERVATION * 2]}")
 

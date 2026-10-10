@@ -16,6 +16,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import llm
+from browser_env import PAGE_BREAK
 from calculator import (Authorities, BonusBand, Clarification, Commitment, MASS_TO_GRAMS, Material, Position,
                         PriceCondition, Requirement, active_clarifications, base_price, final_quantities,
                         match_material, merged_assignments, parse_number, parse_when, resolve_requirements, same_text)
@@ -37,7 +38,8 @@ How to extract
 - Dates and times are ISO 8601. Prefer an explicit UTC/ISO timestamp when the evidence shows one. A local time with
   a named timezone keeps its offset (2030-05-01T10:00:00+03:00). A date alone stays YYYY-MM-DD. Mind stated
   day/month orders.
-- State only what the evidence says; null for what it does not say. Never invent, convert or calculate.
+- State only what the evidence says. Leave out every key the evidence says nothing about (no nulls, no empty
+  lists). Never invent, convert or calculate.
 - Evidence can contain drafts, previews, templates, examples, look-alike records for other references and
   superseded content. Extract the authoritative original and set the flags that tell them apart.
 Reply with one JSON object of the requested shape and nothing else."""
@@ -186,13 +188,21 @@ class CaseFile:
             return f'unknown kind "{kind}"; the kinds are: {", ".join(SHAPES)}'
         if len(text.strip()) < 20:
             return "there is no document to file"
-        digest = hashlib.sha1((kind + "\n" + text).encode("utf-8", "replace")).hexdigest()
-        if digest in self.filed:
+        # The pages of a collected list are read side by side: shorter replies, sooner.
+        pages = [page for page in re.split(re.escape(PAGE_BREAK) + r" \d+ =====\n", text) if len(page.strip()) >= 20]
+        fresh = 0
+        for page in pages:
+            digest = hashlib.sha1((kind + "\n" + page).encode("utf-8", "replace")).hexdigest()
+            if digest in self.filed:
+                continue
+            self.filed.add(digest)
+            self.pending += 1
+            fresh += 1
+            asyncio.ensure_future(self._extract(kind, page, source, agent))
+        if not fresh:
             return f"this document is already filed as {kind}"
-        self.filed.add(digest)
-        self.pending += 1
-        asyncio.ensure_future(self._extract(kind, text, source, agent))
-        return f"filed {len(text)} characters from {source} as {kind}; the facts in it will be reported to you"
+        return (f"filed {len(text)} characters ({fresh} page(s)) from {source} as {kind}; the facts in it will be "
+                "reported to you")
 
     async def _extract(self, kind: str, text: str, source: str, agent: str) -> None:
         try:
@@ -202,6 +212,7 @@ class CaseFile:
             data = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
                                        think=True, max_tokens=8000, label=f"extract:{kind}")
             summary = self.merge(kind, data) if data else "the extraction failed; file the document again"
+            print(f"[extract {kind}] {source} -> {json.dumps(data, ensure_ascii=False)[:1800]}", flush=True)
         except Exception as error:  # noqa: BLE001
             summary = f"the extraction failed ({str(error)[:120]}); file the document again"
         self.news.setdefault(agent, []).append(f"From the {kind} document you filed ({source}): {summary}")

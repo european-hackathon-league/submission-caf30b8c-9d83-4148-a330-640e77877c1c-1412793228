@@ -10,7 +10,8 @@ import math
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from fractions import Fraction
 
 CENT = Decimal("0.01")
 ZERO = Decimal("0")
@@ -80,7 +81,10 @@ def parse_when(raw, end_of_day: bool = False) -> datetime | None:
         if not german:
             return None
         day, month, year, hour, minute = german.groups()
-        when = datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0))
+        try:
+            when = datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0))
+        except ValueError:
+            return None
         if hour is None and end_of_day:
             when += timedelta(days=1) - timedelta(microseconds=1)
     return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
@@ -92,12 +96,13 @@ def allocate_cents(total_cents: int, weights: dict[str, Decimal], method: str = 
     Every share is floored to the cent; the cents left over go out by `method`: "largest_remainder" (ties to the
     lower key), "remainder_to_first", "remainder_to_last" or "remainder_to_largest" (the biggest weight).
     """
-    keys = sorted(weights)
+    keys = sorted(weights, key=position_order)
     total_weight = sum(weights.values(), ZERO)
     if not keys or total_cents <= 0 or total_weight <= 0:
         return {key: ZERO for key in keys}
-    exact = {key: Decimal(total_cents) * weights[key] / total_weight for key in keys}
-    cents = {key: int(exact[key].to_integral_value(rounding=ROUND_FLOOR)) for key in keys}
+    # Exact fractions: a tie between remainders must be a tie, not a matter of decimal precision.
+    exact = {key: Fraction(total_cents) * Fraction(weights[key]) / Fraction(total_weight) for key in keys}
+    cents = {key: math.floor(exact[key]) for key in keys}
     left = total_cents - sum(cents.values())
     if method == "remainder_to_first":
         cents[keys[0]] += left
@@ -106,9 +111,14 @@ def allocate_cents(total_cents: int, weights: dict[str, Decimal], method: str = 
     elif method == "remainder_to_largest":
         cents[max(keys, key=lambda key: (weights[key], -keys.index(key)))] += left
     else:
-        for key in sorted(keys, key=lambda key: (-(exact[key] - cents[key]), key))[:left]:
+        for key in sorted(keys, key=lambda key: (-(exact[key] - cents[key]), keys.index(key)))[:left]:
             cents[key] += 1
     return {key: Decimal(cents[key]) * CENT for key in keys}
+
+
+def position_order(key) -> list:
+    """Position identifiers in ascending order: their numbers count as numbers ("2" before "10")."""
+    return [(0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.findall(r"\d+|\D+", str(key))]
 
 
 def same_text(a: str | None, b: str | None) -> bool:
@@ -262,6 +272,7 @@ class Bid:
 
     def answer(self) -> dict:
         def number(value):
+            value = Decimal(str(value))
             return int(value) if value == value.to_integral_value() else float(value)
         positions = []
         for line in self.lines:
@@ -297,7 +308,7 @@ def resolve_requirements(requirements: dict[str, Requirement], governing_revisio
             if need is None or not governing_revision or not same_text(revision, governing_revision):
                 continue
             name = attribute.lower()
-            number = parse_number(value)
+            number = parse_number(value, "de-DE")  # a dot in a German dimension groups thousands
             if name in ("stroke", "bore", "pressure") and number is not None:
                 setattr(need, {"stroke": "stroke_mm", "bore": "bore_mm", "pressure": "pressure_bar"}[name], int(number))
             elif name in ("mounting", "certification"):
@@ -390,7 +401,7 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
     omitted: list[str] = []
 
     lines: dict[str, Line] = {}
-    for p in sorted(positions, key=lambda p: p.position):
+    for p in sorted(positions, key=lambda p: position_order(p.position)):
         need = needs.get(p.requirement_ref)
         if need is not None and p.requirement_ref not in waiting and not need.missing():
             material = match_material(need, materials)
@@ -401,9 +412,10 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
                            notes=[f"no active material matches requirement {p.requirement_ref} (position {p.position})"])
         else:
             material = None
-        if material is None or p.position not in quantities:
+        if material is None or quantities.get(p.position, 0) <= 0:
             omitted.append(p.position)
             notes.append(f"position {p.position}: " + ("set size unknown" if p.position in unknown_sets
+                                                       else "no quantity" if material is not None
                                                        else f"no material resolved for {p.requirement_ref}"))
             continue
         lines[p.position] = Line(p.position, material.number, quantities[p.position], material=material)
@@ -513,6 +525,6 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
         if line.gaps:
             notes.append(f"position {key}: unresolved {', '.join(line.gaps)}")
 
-    ordered = [lines[key] for key in sorted(lines)]
+    ordered = [lines[key] for key in sorted(lines, key=position_order)]
     total = round_cents(sum((Decimal(line.quantity) * line.unit_price for line in ordered), ZERO))
     return Bid(tender_reference, "bid", discount, ordered, total, omitted=sorted(set(omitted)), notes=notes)
