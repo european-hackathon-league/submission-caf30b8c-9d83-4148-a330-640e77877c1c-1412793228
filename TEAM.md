@@ -106,10 +106,10 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 22:37 | run_05d351d6 | Maria | branch `maria/escalation` **ae31fb3** | running | | | | Automatic retry of 9f5d8f25. At 2.5 min: healthy, 0 timeouts, no escalation needed yet |
+| 22:37 | **run_05d351d6** | Maria | branch `maria/escalation` **ae31fb3** | **100** 🎉 | ✅ | 11.7 min | 230 / $0.29 | Retry of 9f5d8f25. Clean: investigation 421 s, no open questions, 0 timeouts, longest repeat 4×. No agent got stuck, so **no escalated turn was needed**: this shows escalation does no harm, not yet what it adds |
 | 22:37 | run_9f5d8f25 | Maria | branch `maria/escalation` **ae31fb3** | **– (platform failure, doesn't count)** | | 7.2 min | 80 / $0.07 | Atira: "The platform failed, not your agent system… started again automatically" |
 | 22:48 | run_f2032d98 | Vamshidhar | ? | running | | | | |
-| 22:37 | run_67d30f66 | Maria | branch `maria/erp-loop-fixes` **9c3081a** | running | | | | Automatic retry of 294db2ef. At 2.5 min: healthy, 0 timeouts, ERP filing materials |
+| 22:37 | **run_67d30f66** | Maria | branch `maria/erp-loop-fixes` **9c3081a** | **100** 🎉 | ✅ | 12.5 min | 299 / $0.40 | Retry of 294db2ef. Clean: investigation 464 s, no open questions, 0 timeouts; one agent sent idle when stuck. **First sandbox 100 with role-based routing and Word/Excel/CSV reading** |
 | 22:36 | run_294db2ef | Maria | branch `maria/erp-loop-fixes` **9c3081a** | **– (platform failure, doesn't count)** | | 7.5 min | 210 / $0.26 | Atira: "The platform failed, not your agent system". Until then strong: investigation ended by itself in **346 s with no open questions**, complete 5-position bid, halfway through the form |
 | 22:33 | run_af92c314 | Vamshidhar | package 0cca498f | queued | | | | Automatic retry of 0634f300 |
 | 22:33 | run_0634f300 | Vamshidhar | package 0cca498f | **– (platform failure, doesn't count)** | | | | Retried automatically |
