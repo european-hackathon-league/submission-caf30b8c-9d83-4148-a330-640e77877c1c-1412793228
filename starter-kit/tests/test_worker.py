@@ -10,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import llm  # noqa: E402
-from worker import Agent, state_fingerprint  # noqa: E402
+from worker import Agent, action_fingerprint, state_fingerprint  # noqa: E402
 
 
 class FakeTab:
@@ -62,6 +62,12 @@ class ActionVerification(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome["done"])
         self.assertIn("verification: fill caused no visible page change", asked[1])
         self.assertIn("instead of repeating it blindly", asked[1])
+
+    def test_generated_action_ids_do_not_hide_a_repeated_control(self):
+        first = 'url: http://portal.test\n[1] button "Continue"'
+        reread = 'url: http://portal.test\n[48] button "Continue"'
+        self.assertEqual(action_fingerprint([{"do": "click", "id": 1}], first),
+                         action_fingerprint([{"do": "click", "id": 48}], reread))
 
     def test_generated_action_ids_do_not_count_as_a_state_change(self):
         first = 'url: http://portal.test\n[1] button "Continue"'

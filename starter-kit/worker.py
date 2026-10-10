@@ -69,6 +69,18 @@ def state_fingerprint(observation: str) -> str:
     return hashlib.sha1(stable.encode("utf-8", "replace")).hexdigest()
 
 
+def action_fingerprint(actions: list[dict], observation: str = "") -> str:
+    """Use a control's visible label instead of its transient id in repeat checks."""
+    stable_actions = []
+    for action in actions:
+        stable = {key: value for key, value in action.items() if key != "id"}
+        if action.get("id") is not None:
+            match = re.search(rf"(?m)^\[{re.escape(str(action['id']))}\](.*)$", observation)
+            if match:
+                stable["target"] = match.group(1).strip()
+        stable_actions.append(stable)
+    return json.dumps(stable_actions, sort_keys=True)
+
 class Agent:
     def __init__(self, name: str, tab: Tab, system: str, briefing: Callable[[], str],
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
@@ -244,7 +256,7 @@ class Agent:
 
             # A repeated action is a loop only if the model also sees the same
             # page.  A form may keep its URL while legitimately changing state.
-            signature = json.dumps(actions, sort_keys=True) + state_fingerprint(page)
+            signature = action_fingerprint(actions, page) + state_fingerprint(page)
             seen_signatures[signature] = seen_signatures.get(signature, 0) + 1
             repeats = repeats + 1 if signature == last_signature else max(0, seen_signatures[signature] - 1)
             last_signature = signature

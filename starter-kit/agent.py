@@ -58,6 +58,8 @@ Case-file actions:
 How to work
 - Every turn starts with the case file and the OPEN QUESTIONS. Work on the questions your website can answer;
   the other agents handle the rest. Facts they file show up in the case file and can open new questions for you.
+- The OPEN QUESTIONS shown to you are the work assigned to your website. Do not search for another website's
+  records. If none are open, finish with done; the coordinator will call you again when your website gets new work.
 - You remember only the page in front of you: file a relevant page with keep BEFORE you leave it. keep files the
   whole document, also what was cut from your view. File a document once, with the right kind. Facts on a page only
   enter the CASE FILE when you call keep on that page; reading a value in your thought without calling keep leaves
@@ -101,7 +103,7 @@ class Team:
     def hook(self, name: str):
         async def hold(why: str) -> str | None:
             version = self.case.version
-            before = {qid for qid, _ in self.case.questions()}
+            before = {qid for qid, _ in questions_for_site(name, self.case.questions())}
             # Documents still being read when the agent went idle: once one of them is done, the agent is woken if
             # questions are still open. Sandbox run 024bd2ac: the ERP agent went idle "until the requirements are
             # read" with its material questions already open; they were never new, so it slept for 400 s.
@@ -114,10 +116,10 @@ class Team:
                         break
                     if changed:
                         version = self.case.version
-                        fresh = {qid for qid, _ in self.case.questions()} - before
+                        fresh = {qid for qid, _ in questions_for_site(name, self.case.questions())} - before
                         if fresh or self.case.news.get(name):
                             return "The case file has news" + (f"; new open questions: {', '.join(sorted(fresh))}" if fresh else "") + "."
-                        still_open = {qid for qid, _ in self.case.questions()}
+                        still_open = {qid for qid, _ in questions_for_site(name, self.case.questions())}
                         rested = time.time() - self.woken.get(name, 0.0) >= 30
                         if reading and self.case.pending < reading and still_open and rested:
                             self.woken[name] = time.time()
@@ -136,7 +138,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     system = INVESTIGATOR.format(site=name, url=tab.base_url, brief=case.brief, actions=ACTIONS_HELP)
 
     def briefing() -> str:
-        questions = case.questions()
+        questions = questions_for_site(name, case.questions())
         news = case.take_news(name)
         text = f"CASE FILE\n{case.status()}\n\nOPEN QUESTIONS\n"
         text += "\n".join(f"- [{qid}] {question}" for qid, question in questions) or "(none)"
@@ -181,6 +183,20 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
                               "when amendments or reserves are filed. If you need facts the other agents have not "
                               "filed yet, finish with done; you are called again when the case file has news.")
     return agent
+
+
+def questions_for_site(site_id: str, questions: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Keep specialized mail and ERP agents on questions their portal can resolve (from Vamshidhar's v1 package,
+    sandbox run 44a626ef: 100 in 9.6 min, every agent finished by itself)."""
+    site = site_id.casefold()
+    if "erp" in site:
+        prefixes = ("material:", "data:")
+        return [(qid, text) for qid, text in questions if qid.startswith(prefixes)]
+    if "mail" in site:
+        prefixes = ("condition_group:", "packaging_tariff:", "delivery_commitment:", "setup_pool:",
+                    "project_bonus:", "index:", "fx:", "reserve:")
+        return [(qid, text) for qid, text in questions if qid in ("mailbox", "discount") or qid.startswith(prefixes)]
+    return questions
 
 
 async def open_tabs(playwright, sites: list[dict]) -> tuple[list, dict[str, Tab]]:
