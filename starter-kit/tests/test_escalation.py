@@ -46,6 +46,19 @@ class Escalation(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome["done"])  # still given up on (sent idle) when the stronger turn did not help
         self.assertLess(len(calls), 30)  # well before the recording runs out
 
+    async def test_the_bid_clerk_is_never_escalated(self):
+        """The clerk fills every position the same way on purpose; an escalated turn mid-form only costs time."""
+        replies = [{"thought": "select and apply", "actions": [{"do": "fill", "id": 1, "text": str(i)}]} for i in range(20)]
+        calls = []
+
+        async def model(messages, **kwargs):
+            calls.append(kwargs.get("label"))
+            return replies.pop(0) if replies else {"thought": "end", "actions": [{"do": "done", "summary": "end"}]}
+
+        with patch.dict(os.environ, {"SANITY_CHECKS": "default"}), patch.object(llm, "chat_json", model):
+            await Agent("submit", ScreenshotTab(True), "system", lambda: "job", max_steps=25).run()
+        self.assertNotIn("submit:escalated", calls)
+
     async def test_switched_off_there_is_no_escalated_turn(self):
         _, calls = await run_looping_investigator("validator")
         self.assertFalse([c for c in calls if c["label"] == "erp:escalated"])

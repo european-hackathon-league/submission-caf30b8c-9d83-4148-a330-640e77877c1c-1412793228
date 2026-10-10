@@ -322,8 +322,9 @@ class Agent:
                     self._circle_hints += 1
                     self._circle_hint = self.circle_hint
                     # The second time: also one stronger turn, reasoning on and with a screenshot (sanity plugin
-                    # "escalation"), before the agent is given up on at the third.
-                    if self._circle_hints == 2 and self.escalations < ESCALATION_LIMIT and sanity.enabled("escalation"):
+                    # "escalation"), before the agent is given up on at the third. Investigators only (they have an
+                    # idle hook): the bid clerk repeats the same pattern for every position on purpose (run bb0655a2).
+                    if self._circle_hints == 2 and self.idle and self.escalations < ESCALATION_LIMIT and sanity.enabled("escalation"):
                         self._escalate = True
             if circling:
                 final = await llm.chat_json(self._messages(

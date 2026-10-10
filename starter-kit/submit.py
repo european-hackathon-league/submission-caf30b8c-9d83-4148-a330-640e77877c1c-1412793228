@@ -59,6 +59,9 @@ Reading the bid sheet
 - Save turns: once you have seen how one step of the form works (which fields, which button applies a choice or
   moves on), do a whole step, for example one position with all its choices and amounts, in one "steps" action,
   using the labels exactly as the page shows them. If it stops part-way, read the page and carry on from there.
+  This includes a configurator where each choice must be applied before the next one appears: put every choice
+  and its apply button, in order, into the same "steps" action, then the amounts and the button that moves on.
+  You know every value from the bid; you do not need to see each list first.
 
 {actions}
 One more action:
