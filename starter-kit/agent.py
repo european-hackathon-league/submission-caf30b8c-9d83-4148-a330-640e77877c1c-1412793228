@@ -23,6 +23,7 @@ import llm
 import run as contract
 from browser_env import Tab
 from calculator import calculate_bid
+import validate
 from casefile import SHAPES, CaseFile, read_context
 from worker import ACTIONS_HELP, Agent
 
@@ -182,6 +183,9 @@ async def solve(task: dict, playwright) -> dict | None:
         facts = case.inputs()
         bid = calculate_bid(case.reference, case.scenario, facts.governing, facts.positions, facts.clarifications,
                             facts.requirements, facts.materials, facts.authorities, facts.no_material)
+        bid, issues = validate.check(bid, {p.position for p in facts.positions} or None)
+        if issues:
+            print("VALIDATOR: " + " | ".join(issues), flush=True)
         print(f"Investigation took {time.time() - started:.0f} s. {llm.summary()}", flush=True)
         print("CASE FILE\n" + case.status(), flush=True)
         print("OPEN QUESTIONS LEFT: " + (", ".join(qid for qid, _ in case.questions()) or "none"), flush=True)

@@ -51,7 +51,7 @@ Brief -> 4 site agents in parallel -> case file (evidence) -> calculator -> vali
 | Site agents | `agent.py` + `worker.Agent` | The model decides where to go; each agent finishes its site in < 5 min | 🟨 ~14 min for all four; Q&A coverage open |
 | Case file | `casefile.CaseFile` | Facts with provenance; exact reference, authorised sender, latest record no later than the scenario date | ✅ picks the right records on our reference data; failed extractions are now retried |
 | Calculator | `calculator.py` | All rules, Decimal, half-up, largest-remainder allocation; the model never does arithmetic | ✅ |
-| Validator | none yet | Schema, arithmetic consistency, no extra or duplicate positions, bid / no_bid logic, before submitting | ⬜ not built |
+| Validator | `validate.check` (called in `agent.py` before submitting) | Schema, arithmetic consistency, no extra or duplicate positions, bid / no_bid logic, before submitting | ✅ built 16:55, 8 tests; no model calls |
 | Submitter | `submit.py` | Bid form filled from the brief's steps, TAN requested last, signed | 🟨 under test in the sandbox now |
 | Time guard | `agent.py` (`hard_stop`, `submit_reserve`) | Unfinished positions omitted and the bid still signed before 20 min | 🟨 budget exists; not tested with a forced short deadline |
 
