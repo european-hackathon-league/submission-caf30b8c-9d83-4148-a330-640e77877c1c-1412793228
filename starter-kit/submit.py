@@ -223,7 +223,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         system = COURIER.format(site=courier_tab.site_id, url=courier_tab.base_url, reference=reference,
                                 actions=ACTIONS_HELP)
         courier = Agent("courier", courier_tab, system, request, deadline=min(deadline, time.time() + MAIL_BUDGET),
-                        max_steps=COURIER_STEPS, think=COURIER_THINKS)
+                        max_steps=COURIER_STEPS, think=COURIER_THINKS, finish_on_repeat=3)
         outcome = await courier.run()
         answer = str(outcome.get("answer") or "").strip()
         if not answer:

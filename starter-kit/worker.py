@@ -74,7 +74,7 @@ class Agent:
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
                  max_steps: int = 80, think: bool = False,
                  idle: Callable[[str], Awaitable[str | None]] | None = None,
-                 guard: Callable[[dict], str | None] | None = None):
+                 guard: Callable[[dict], str | None] | None = None, finish_on_repeat: int | None = None):
         """`briefing()` heads every turn. `extra` adds actions: name -> handler(action) -> result text.
         `idle("done")` lets the caller hold a finished agent until there is news for it (returns the news) or
         let it stop (returns None)."""
@@ -82,7 +82,14 @@ class Agent:
         self.extra = extra or {}
         self.deadline = deadline or time.time() + 3600
         self.max_steps, self.think, self.idle = max_steps, think, idle
-        self.guard = guard  # a sanity check that may veto a browser action before it runs (sanity.py)
+        self.guard = guard
+        # An agent that states the same thought this many turns in a row has its answer and is only "verifying":
+        # it gets one forced final turn instead of running out of time (stress test: the courier read the right code,
+        # then re-verified it for 14 turns and ended with no answer).
+        self.finish_on_repeat = finish_on_repeat
+        self._thoughts: list[str] = []
+        self._circle_hinted = False
+        self._circle_hint: str | None = None  # a sanity check that may veto a browser action before it runs (sanity.py)
         self.turns: list[dict] = []
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
         self.coverage = Ledger()  # what this agent really opened, typed and followed (coverage.py)
@@ -191,6 +198,31 @@ class Agent:
                 continue
             failures = 0
             thought = str(reply.get("thought", ""))[:300]
+            self._thoughts.append(" ".join(thought.lower().split())[:160])
+            recent = self._thoughts
+            # Going in circles: the same thought three times (A A A), or two thoughts alternating (A B A B), as in the
+            # courier stress test where "unlock the list" and "open the newest message" alternated for 19 turns.
+            circling = bool(self.finish_on_repeat) and (
+                (len(recent) >= 3 and len(set(recent[-3:])) == 1)
+                or (len(recent) >= 4 and recent[-1] == recent[-3] and recent[-2] == recent[-4] and recent[-1] != recent[-2]))
+            if circling and not self._circle_hinted:
+                self._circle_hinted = True
+                circling = False  # first time: a concrete way out, not yet the forced finish
+                self._circle_hint = ("You are going in circles: the same steps keep repeating without progress. The "
+                                     "page may already show what you need, including inside embedded documents: read "
+                                     "it fully. Otherwise open the link's address directly with goto, or try a "
+                                     "different way. If you already have the answer, finish with done now.")
+            if circling:
+                final = await llm.chat_json(self._messages(
+                    user + "\n\nYou have reached the same conclusion several times in a row. Stop checking and finish "
+                    'NOW with exactly one action: {"do": "done", "summary": "...", "answer": "..."}, the answer being '
+                    "the value you found (or no answer if you truly found none)."), think=False, label=self.name)
+                done = next((a for a in (final.get("actions") or []) if isinstance(a, dict) and a.get("do") == "done"), None)
+                done = done or (final if final.get("do") == "done" else None)
+                if done is not None:
+                    self.log(f"forced to finish after going in circles: {json.dumps(done, ensure_ascii=False)[:200]}")
+                    outcome.update(done=True, summary=str(done.get("summary", "")), answer=done.get("answer"))
+                    break
             head = page.split("\n", 2)
             short = f"RESULTS OF YOUR LAST ACTIONS\n{done_text[:700]}\n\nPAGE (text dropped)\n" + "\n".join(head[:2])
             self.turns.append({"user": user, "short": short, "assistant": json.dumps(reply, ensure_ascii=False)})
@@ -207,6 +239,9 @@ class Agent:
             last_signature = signature
 
             results, finished, moved = [], None, False
+            if self._circle_hint:  # shown with the results of this turn's actions, at the top of the next turn
+                results.append(self._circle_hint)
+                self._circle_hint = None
             for action in actions[:8]:
                 if not isinstance(action, dict):
                     continue
