@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import llm
 from browser_env import PAGE_BREAK
+from sanity import same_value
 from calculator import (Authorities, BonusBand, Clarification, Commitment, MASS_TO_GRAMS, Material, Position,
                         PriceCondition, Requirement, active_clarifications, base_price, final_quantities,
                         match_material, merged_assignments, parse_number, parse_when, resolve_requirements, same_text)
@@ -210,11 +211,22 @@ def validate_extraction(kind: str, data) -> tuple[dict | None, str]:
     return clean, note
 
 
-def _merge(store: dict, key, record: dict) -> None:
+QUIET_FIELDS = ("description", "unit", "number_format", "note")  # wording, not a fact the calculator uses
+
+
+def _merge(store: dict, key, record: dict) -> list[tuple[str, object, object]]:
+    """The value filed last is the one in use. Returns where it replaced a different one, as (field, earlier,
+    later): two documents that disagree about the same record are a conflict to report, not to overwrite in
+    silence (a draft, a superseded revision and a look-alike record all look like this)."""
     old = store.setdefault(key, {})
+    replaced = []
     for name, value in record.items():
         if value is not None and value != "" and value != []:
+            earlier = old.get(name)
+            if earlier is not None and name not in QUIET_FIELDS and not same_value(earlier, value):
+                replaced.append((name, earlier, value))
             old[name] = value
+    return replaced
 
 
 class CaseFile:
@@ -235,6 +247,7 @@ class CaseFile:
         self.conditions: dict[str, dict[tuple, dict]] = {}
         self.messages: dict[tuple, dict] = {}
         self.evidence: list[dict] = []  # extracted records, retained with the page and agent that supplied them
+        self.conflicts: list[str] = []  # where a later document replaced a different value of an earlier one
         self.answers: dict[str, tuple[str, str]] = {}  # question id -> (complete | absent, note)
         self.filed: set[str] = set()
         self.news: dict[str, list[str]] = {}
@@ -343,11 +356,17 @@ class CaseFile:
     def merge(self, kind: str, data: dict) -> str:
         """Merge extracted records; returns a one-line account of what they said."""
         told: list[str] = []
+        clashes: list[str] = []
+
+        def put(store: dict, key, row: dict, label: str) -> None:
+            for name, earlier, later in _merge(store, key, row):
+                clashes.append(f"{label} {name}: {earlier!r} on an earlier document, {later!r} on this one")
+
         if kind == "positions":
             for row in data.get("positions") or []:
                 key = _text(row.get("position"))
                 if key:
-                    _merge(self.positions, key, row)
+                    put(self.positions, key, row, f"position {key}")
                     told.append(f"{key}: {row.get('quantity')} {row.get('unit') or ''} -> {row.get('requirement_ref')}")
         elif kind == "clarifications":
             for row in data.get("answers") or []:
@@ -359,14 +378,14 @@ class CaseFile:
             for row in data.get("revisions") or []:
                 key = _text(row.get("revision"))
                 if key:
-                    _merge(self.revisions, key, row)
+                    put(self.revisions, key, row, f"revision {key}")
                     told.append(f"{key}: {row.get('status')} ({row.get('date')})")
         elif kind == "requirements":
             revision = _text(data.get("revision")) or ""
             for row in data.get("requirements") or []:
                 key = _text(row.get("requirement_ref"))
                 if key:
-                    _merge(self.requirements, (revision, key), row)
+                    put(self.requirements, (revision, key), row, f"requirement {key} in revision {revision or '?'}")
                     told.append(f"{key} in revision {revision or '?'}: bore {row.get('bore_mm')}, stroke {row.get('stroke_mm')}"
                                 f"{' (usable travel)' if row.get('stroke_is_usable_travel') else ''}, {row.get('pressure_bar')} bar, "
                                 f"{row.get('mounting')}, certification {row.get('certification')}, group {row.get('catalogue_group')}")
@@ -374,7 +393,7 @@ class CaseFile:
             for row in data.get("materials") or []:
                 key = _text(row.get("material_number"))
                 if key:
-                    _merge(self.materials, key, row)
+                    put(self.materials, key, row, f"material {key}")
                     told.append(f"{key}: " + ", ".join(f"{name}={value}" for name, value in row.items()
                                                        if value is not None and name not in ("material_number", "description", "number_format")))
         elif kind == "price_conditions":
@@ -394,7 +413,14 @@ class CaseFile:
                 told.append(f"{row.get('subject')} from {row.get('sender')} at {row.get('timestamp')} about "
                             f"{row.get('tender_reference')}: {row.get('topic')} ({', '.join(blocks) or 'no usable data'})")
         self._bump()
-        return "; ".join(told)[:1500] if told else "nothing usable was found in it"
+        account = "; ".join(told)[:1500] if told else "nothing usable was found in it"
+        if clashes:
+            self.conflicts.extend(clashes)
+            print(f"[conflict {kind}] " + " | ".join(clashes)[:1200], flush=True)
+            account = ("CONFLICT WITH AN EARLIER DOCUMENT (the value filed last is now in use): " + "; ".join(clashes[:6])
+                       + ". Two records disagree: check the status, date and reference of both against the brief's "
+                         "rules before you rely on either. " + account)
+        return account
 
     # ---- from records to calculator inputs -------------------------------------------------------------------
 
@@ -713,7 +739,7 @@ class CaseFile:
                            "materials": self.materials,
                            "conditions": {key: list(rows.values()) for key, rows in self.conditions.items()},
                            "messages": list(self.messages.values()), "answers": self.answers, "mailbox": self.mailbox,
-                           "evidence": self.evidence},
+                           "evidence": self.evidence, "conflicts": self.conflicts},
                           ensure_ascii=False, default=str)
 
 
