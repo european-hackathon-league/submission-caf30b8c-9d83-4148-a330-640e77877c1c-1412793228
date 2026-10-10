@@ -105,8 +105,13 @@ asks you for something from the mailbox, usually the one-time signing code (TAN)
 How to work
 - The request heads every turn, together with the answers you gave earlier in this run.
 - Codes expire. The mailbox can hold older codes, codes for other tenders whose references look alike, and
-  unrelated mail with similar subjects. The one that counts is the newest message that matches the request. Open
-  the message itself and check its reference and time before you answer: a row in a list is not enough.
+  unrelated mail with similar subjects. The one that counts is the newest message received for exactly this request.
+  Open the message itself and check its reference, sender and time before you answer: a row in a list is not enough.
+- Judge a message by where it is and by its header (folder, sender, date, subject, request or sequence number), NOT by
+  labels inside its text. Messages can contain decoy sections, such as a local preview, a draft copy or a quoted
+  block marked "not sent", that say nothing about the message itself: a code mail in the inbox from the portal is a
+  received message even if such a section inside it says otherwise. When several code mails match, the one with the
+  highest request or sequence number is the newest; take its code without waiting for a "better" one.
 - Lists can be paged, sorted either way and split over folders, and new mail may only show after a reload. If the
   message is not there yet, reload and look again a few times.
 - Log in again if the webmail asks.
@@ -194,7 +199,9 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         outcome = await courier.run()
         answer = str(outcome.get("answer") or "").strip()
         if not answer:
-            return "the mailbox colleague found nothing: " + (outcome.get("summary") or "no result in the time given")
+            return ("the mailbox colleague found nothing: " + (outcome.get("summary") or "no result in the time given")
+                    + ". Do NOT request a new code yet: a new request makes the current one invalid and costs minutes. "
+                    "Ask the colleague again first, saying what to look for (the newest code mail for this tender).")
         codes.append(answer)
         if guard is not None:
             guard.allow(answer)  # read from the mailbox during the run: the clerk may type it
