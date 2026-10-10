@@ -212,6 +212,9 @@ class CaseFile:
             data = await llm.chat_json([{"role": "system", "content": EXTRACT_SYSTEM}, {"role": "user", "content": prompt}],
                                        think=True, max_tokens=8000, label=f"extract:{kind}")
             summary = self.merge(kind, data) if data else "the extraction failed; file the document again"
+            if data and summary == "nothing usable was found in it":
+                data = None
+                summary = "no usable records were extracted; check the evidence and file it again"
             print(f"[extract {kind}] {source} -> {json.dumps(data, ensure_ascii=False)[:1800]}", flush=True)
         except Exception as error:  # noqa: BLE001
             summary = f"the extraction failed ({str(error)[:120]}); file the document again"
@@ -532,6 +535,8 @@ class CaseFile:
             return 'status must be "complete" or "absent"'
         if self.pending:
             return "facts from documents you filed are still being extracted; wait for them, then answer"
+        if question == "clarifications" and status == "complete" and not self.clarifications:
+            return "no Q&A answers have been extracted yet; reopen the Q&A evidence, file it as clarifications, and wait for the extraction result"
         if question.startswith("material:") and status == "absent":
             facts = self.inputs()
             answers = active_clarifications(facts.clarifications, self.scenario)
