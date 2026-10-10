@@ -90,6 +90,8 @@ class Agent:
         self._thoughts: list[str] = []
         self._circle_hinted = False
         self._circle_hinted_at = -99
+        self._circle_hints = 0
+        self._stuck = False
         self.circle_hint = circle_hint or (
             "You are going in circles: the same steps keep repeating without progress. The page may already show "
             "what you need, including inside embedded documents: read it fully. Otherwise open the link's address "
@@ -216,7 +218,10 @@ class Agent:
             if circling and (not self.finish_on_repeat or not self._circle_hinted):
                 circling = False  # a concrete way out first; only an agent with finish_on_repeat is then forced to finish
                 if len(recent) - self._circle_hinted_at >= 6:  # once every 6 turns at most
+                    if self._circle_hints >= 2 and self.idle:
+                        self._stuck = True  # two hints ignored: an investigator is sent idle (see below)
                     self._circle_hinted, self._circle_hinted_at = True, len(recent)
+                    self._circle_hints += 1
                     self._circle_hint = self.circle_hint
             if circling:
                 final = await llm.chat_json(self._messages(
@@ -329,6 +334,18 @@ class Agent:
                 results.append("You have sent the same actions three times with the same result: they do not work "
                                "here. Read the page again from the top for another way (a further check, a toggle, a "
                                "different link, a search), or finish with done.")
+            # An agent that can be held idle (an investigator) and is stuck is sent idle as if it had finished: the
+            # same actions six times on an unchanged page, or still circling after two hints. Sandbox run 74b22ceb:
+            # the tender-portal agent opened the same unchanged page 122 times (~8 min), and the investigation
+            # waited for it until its time limit. Idle, it is woken again when the case file has news for it.
+            if finished is None and self.idle and (repeats >= 5 or self._stuck):
+                self.log("stuck: repeating itself without progress; sent idle until the case file has news")
+                finished = {"do": "done", "summary": "stopped: repeated the same steps without progress"}
+                self._stuck, self._circle_hints, self._thoughts = False, 0, []
+                seen_signatures.clear()
+                last_signature, repeats = "", 0
+                results.append("You were sent idle because you kept repeating the same steps without progress. "
+                               "Work on what the case file news asks for, by a different way than before.")
             if finished is not None:
                 outcome.update(summary=str(finished.get("summary", "")), answer=finished.get("answer"))
                 news = await self.idle("done") if self.idle else None

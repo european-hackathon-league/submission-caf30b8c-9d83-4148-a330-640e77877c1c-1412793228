@@ -278,3 +278,21 @@ class CircleDetection(unittest.IsolatedAsyncioTestCase):
         hinted = [i for i, text in enumerate(asked) if "file the candidate with keep" in text]
         self.assertEqual(hinted, [13, 19])  # third pass of the cycle, then again at most every 6 turns
         self.assertTrue(outcome["done"])  # an investigator is hinted, never forced to finish
+
+    async def test_investigator_repeating_an_unchanged_page_is_sent_idle(self):
+        """Sandbox run 74b22ceb: the tender-portal agent opened the same unchanged page 122 times."""
+        replies = [{"thought": "check the remaining documents", "actions": [{"do": "fill", "id": 1, "text": "Same"}]}
+                   for _ in range(20)]
+        idled = []
+
+        async def model(messages, **kwargs):
+            return replies.pop(0)
+
+        async def idle(state):
+            idled.append(len(replies))
+            return None  # no news: the investigation ends
+
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("test", FakeTab(False), "system", lambda: "job", max_steps=30, idle=idle).run()
+        self.assertTrue(outcome["done"])
+        self.assertEqual(idled, [14])  # sent idle after six identical rounds, not after the 30-step cap
