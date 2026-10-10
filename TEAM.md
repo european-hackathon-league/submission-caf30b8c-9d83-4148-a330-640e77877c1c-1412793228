@@ -1,6 +1,6 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 19:55.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 20:00.
 
 ## Owners
 
@@ -32,7 +32,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 17:34 | run_faa680e1 | Vamshidhar | ? | running | | | | |
+| **17:53** | **run_a85be021** | Maria | **main 7ef7411 (merge of the 98.7 branch + main's fixes)** | running | | | | Submission candidate: submit if eligible and ≥ 98.7 |
+| 17:34 | run_faa680e1 | Vamshidhar | pkg 0a714bff | 0 (failed) | ❌ | 18.1 min | 219 / $0.45 | No answer submitted |
 | 17:16 | run_1d8b1f72 | Vamshidhar | pkg 3e4e22e7 | – (failed) | ❌ | 19.7 min | 333 / $0.47 | No answer submitted within the time |
 | **17:04** | **run_60233f96** | Vamshidhar | **b8f3228** (branch codex/robustness-runfix; verified file by file) | **98.7** 🎉 | ✅ | **10.1 min** | 245 / $0.33 | All 5 positions priced; only 01.03 lead time wrong (11.7/13). Total, index check, withdrawn check ✅ |
 | 16:58 | run_23a00fcc | Vamshidhar | pkg 8f871985 | 22.8 | ✅ | 14.2 min | 229 / $0.38 | Only 01.01 partly priced (7.8); withdrawn check 0 |
@@ -48,15 +49,17 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 Leaderboard for comparison (17:37 UTC): **isar-labs 100 in 7:19 min / $0.10**, AdminRights 100 in 17:57 / $0.24, Here for the Memes 53.8. Earlier leader: 21.5 (13:00, 14:34). **We have no submission yet.**
 
-**Spread so far (model-directed agent):** 98.7 · 70.7 · 70.7 · 29.1 · 27.8 · 22.8 · 10 · 10. Best and median are far apart: reliability is the main lever.
+**Spread so far (model-directed agent):** 98.7 · 70.7 · 70.7 · 29.1 · 27.8 · 22.8 · 10 · 10 · 0 · 0 (failed). Best and median are far apart.
+
+**Local scorer:** calibrated on these official breakdowns, deviation 0.00 on all 8 scored runs (`tuning/calibrate.py`). Best and median are far apart: reliability is the main lever.
 
 ## Success levels
 
-| Level | Criterion | Status (18:15) |
+| Level | Criterion | Status (20:00) |
 |---|---|---|
 | 🟢 Minimum | Eligible signed bid (correct tender reference) on the public dataset | ✅ reached 17:34 (test run 6da03229: eligible, quality 10; the bid was signed but empty) |
-| 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | 🟨 **best sandbox 70.7** (run 8184b178, 16.6 min, $0.43): 4 of 5 positions perfect · missing: position 01.01 (~28 pts incl. total + index check), one lead time |
-| 🔵 Target | Quality ≥ 95, < 8 min, low cost (Qwen first), 3 test runs in a row without a crash | ⬜ |
+| 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | ✅ **98.7 in 10.1 min** (run 60233f96, b8f3228), but not reliable yet (next runs 22.8, 0) |
+| 🔵 Target | Quality ≥ 95, < 8 min, low cost (Qwen first), 3 test runs in a row without a crash | 🟨 ≥ 95 once; < 8 min not yet (leader on the board: 100 in 7:19); 3 in a row not yet |
 | ⭐ Final-ready | Nothing layout-specific in the code; passes the AI review; clean README | 🟨 package scan clean before every test run; README describes the architecture; AI review not yet tried (no `atira submit` yet) |
 
 ## Milestones
@@ -67,11 +70,11 @@ Status: ⬜ open · 🟨 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|
 | M0 | Setup | CLI, team, repo, Entire hooks, scouting of the four sites | ✅ |
 | M1 | Walking skeleton | The agent logs into all 4 sites in parallel, reads the brief and **submits a signed bid** (even partial) in a test run, end to end | ✅ 17:34: signed and eligible in the sandbox (form ~2 min, signing code read in 8 s) |
-| M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 nearly: run 8184b178 read positions, Q&A (withdrawn-answer check ✅), discount, materials, prices for 4 of 5 positions. Open: whatever blocks position 01.01, the shared-stock lead time of 01.03, ERP free stock, mailbox address. Sandbox access varies between runs |
+| M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 reached in run 60233f96 (all facts but the free stock behind one lead time); not yet in every run. Free stock and Q&A units fixed since (2d96c95, merged) |
 | M3 | Calculator correct | All rules implemented and unit-tested; a complete bid from correct facts | ✅ 100/100 against our reference answer, also after every merge · latent edge cases open (Vamshidhar) |
-| M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | 🟨 70.7 with 4 of 5 positions; one position away |
-| M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | 🟨 robustness parts done: timeouts, tab renewal, submit reserve; quality and speed not yet |
-| M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | ⬜ cut-off time still unknown |
+| M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | ✅ 98.7: all 5 positions, signed (run 60233f96, 17:04 UTC) |
+| M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | 🟨 quality ≥ 95 once; robustness: timeouts, tab renewal, agent restart, coverage gate, evidence conflicts, sanity plugins. Open: reliability (3 in a row), speed (< 8 min) |
+| M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | ⬜ first submission pending (after run a85be021); cut-off time still unknown |
 
 ## Timeline and approach (10 Oct, local time)
 
@@ -119,11 +122,13 @@ same version can be compared with and without a check. The run log prints which 
 
 | Plugin | Hooks into | Catches | Status |
 |---|---|---|---|
-| `validator` | the bid, before it is entered | duplicate or foreign positions, a total that is not the sum of the lines, broken lines | ✅ |
-| `typing_guard` | every value the bid clerk types | values from nowhere: an invented e-mail, a made-up price, a mistyped number | ✅ |
-| `no_guessed_mailbox` | bidder details for the clerk | an unknown mailbox address filled in by guessing (the clerk asks the mailbox colleague instead) | ✅ |
-| `grounding` | every extracted fact | numbers, keys and identifiers not present in the page they were extracted from | ⬜ planned |
-| `summary_check` | before the final signature | the portal's summary disagreeing with the bid sheet | ⬜ planned |
+| `validator` | the bid, before it is entered | duplicate or foreign positions, a total that is not the sum of the lines, broken lines | ✅ on |
+| `typing_guard` | every value the bid clerk types | values from nowhere: an invented e-mail, a made-up price, a mistyped number | ✅ on |
+| `no_guessed_mailbox` | bidder details for the clerk | an unknown mailbox address filled in by guessing | ✅ on |
+| `coverage_gate` | before an agent closes a question | closing as absent after one search, or over a list stopped at its page limit | ✅ on (Vamshidhar) |
+| `summary_check` | before the final signature | a review page that does not show reference, positions and total (waits, bounded; never blocks forever) | ✅ on (Vamshidhar) |
+| `agent_restart` | an investigator that stops unfinished | step limit or loop while questions are open: one fresh restart (new tab, clean conversation) with ≥ 2 min left | ✅ on (32cd87e) |
+| `grounding` | every extracted fact | numbers, keys and identifiers that do not occur as a whole token in the page they came from | ⚪ built, **off by default** until a run shows it helps (`SANITY_CHECKS=all`) |
 
 Comparison runs (fill in): same commit, `SANITY_CHECKS=default` vs `none` → quality, time, blocked actions.
 
