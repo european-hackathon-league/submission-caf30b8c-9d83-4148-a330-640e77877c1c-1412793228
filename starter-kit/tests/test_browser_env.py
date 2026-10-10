@@ -586,6 +586,27 @@ class Acting(Case):
         self.assertEqual([number for number, _, _ in SITE.ORDERS if f"Order {number} |" in said], [11, 12, 13, 14, 15, 16])
         self.assertEqual(SITE.paths, ["/orders", "/orders?page=2"])
 
+    async def test_collect_says_when_the_page_limit_cut_the_list_short_and_when_it_reached_the_end(self):
+        tab = await self.open("/orders")
+        page = await tab.observe()
+        said = await tab.collect(self.control(page, "link", "Next page").id, max_pages=2)
+        self.assertIn('THE LIST IS NOT COMPLETE: this stopped at the limit of 2 page(s) and "Next page" is still there', said)
+        self.assertEqual((tab.last_collect["pages"], tab.last_collect["capped"]), (2, True))
+        page = await tab.observe()  # collecting again from the page it stopped on reads the rest
+        said = await tab.collect(self.control(page, "link", "Next page").id)
+        self.assertNotIn("NOT COMPLETE", said)
+        self.assertEqual((tab.last_collect["control"], tab.last_collect["capped"]), ("Next page", False))
+        self.assertTrue(tab.last_collect["where"].endswith("/orders?page=2"))
+
+    async def test_fill_reads_the_field_back_and_says_when_it_did_not_keep_what_was_typed(self):
+        tab = await self.open("/readback.html")
+        page = await tab.observe()
+        plain = self.control(page, "input", "Plain").id
+        self.assertEqual(await tab.fill(plain, "Example Works"), f"filled [{plain}]")
+        self.assertIn('the field shows it as "12,50"', await tab.fill(self.control(page, "input", "Comma price").id, "12.50"))
+        said = await tab.fill(self.control(page, "input", "Whole number").id, "12.50")
+        self.assertIn('BUT the field now holds "1250", not what was typed', said)
+
     async def every_message_once(self, path: str) -> None:
         tab = await self.open(path)
         page = await tab.observe()

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Prices</title></head>
+<body>
+<h1>Prices</h1>
+
+<!-- Fields that do not keep what is typed: one rewrites the notation, one drops what it does not accept. -->
+<label>Plain <input id="plain"></label>
+<label>Comma price <input id="comma"></label>
+<label>Whole number <input id="whole"></label>
+<script>
+  document.getElementById('comma').addEventListener('input', e => { e.target.value = e.target.value.replace('.', ','); });
+  document.getElementById('whole').addEventListener('input', e => { e.target.value = e.target.value.replace(/[^0-9]/g, ''); });
+</script>
+</body>
+</html>

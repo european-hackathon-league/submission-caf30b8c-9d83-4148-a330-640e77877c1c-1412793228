@@ -30,10 +30,12 @@ REGISTRY: dict[str, Check] = {check.name: check for check in (
           "values that come from nowhere: an invented e-mail, a made-up price, a mistyped number", True),
     Check("no_guessed_mailbox", "bidder details handed to the clerk",
           "an unknown mailbox address filled in by guessing: the clerk asks the mailbox colleague instead", True),
+    Check("coverage_gate", "before an agent closes a question",
+          "a question closed as absent after one search, or closed over a list that stopped at its page limit", True),
     Check("grounding", "every fact the extraction returns",
           "extracted numbers, keys and identifiers that do not appear in the page they came from", False),
     Check("summary_check", "before the final signature",
-          "the portal's summary disagreeing with the bid sheet (wrong dropdown, typo)", False),
+          "a final confirmation on a page that does not show the bid's reference, positions and total", True),
 )}
 
 
@@ -77,6 +79,15 @@ def _as_number(text: str) -> Decimal | None:
         return Decimal(raw)
     except InvalidOperation:
         return None
+
+
+def same_value(typed, shown) -> bool:
+    """Whether a field shows what was typed, allowing for another number notation ("12.50" and "12,50")."""
+    first, second = _clean(typed), _clean(shown)
+    if first.casefold() == second.casefold():
+        return True
+    number, other = _as_number(first), _as_number(second)
+    return number is not None and other is not None and number == other
 
 
 def _leaves(value, out: list) -> None:

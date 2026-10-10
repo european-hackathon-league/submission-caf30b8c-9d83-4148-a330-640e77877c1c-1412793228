@@ -14,6 +14,8 @@ import zipfile
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
+from sanity import same_value
+
 # Renders one document. Returns {text, next}: `text` with ⟦FRAME:n⟧ markers where embedded documents go, `next` the
 # first unused element id. Every control gets data-aid="<id>" so it can be found again.
 SNAPSHOT_JS = r"""
@@ -310,6 +312,7 @@ class Tab:
         self.frames: list[tuple[int, int, object]] = []  # id range -> frame
         self.document = ""  # what `keep` files: the page as last read, a collected listing or a fetched file
         self.document_source = ""
+        self.last_collect: dict | None = None  # how the last `collect` ended: where, control, pages, capped
         self.events: list[str] = []
         self.bad_status = 0
         self.loading: set = set()  # page, frame and data requests that have not come back yet
@@ -510,12 +513,32 @@ class Tab:
             await locator.fill(str(text), timeout=2500)
         except Exception as error:  # noqa: BLE001
             return f"could not fill [{aid}]: {str(error)[:150]}"
+        readback = await self._readback(locator, str(text))  # before Enter can load another page
         if enter:
             await locator.press("Enter")
             await self.settle()
         if await self._modal_is_open():
             return "the page now has a modal dialog; read it before acting behind it"
-        return f"filled [{aid}]" + (" and pressed Enter" if enter else "")
+        return f"filled [{aid}]" + (" and pressed Enter" if enter else "") + readback
+
+    async def _readback(self, locator, typed: str) -> str:
+        """What a field holds right after typing, when that is not what was typed: a form can reformat, cut or
+        silently refuse a value, and a fill that "worked" proves nothing about what the portal will save."""
+        try:
+            kind, value = await locator.evaluate(
+                """el => [(el.getAttribute('type') || '').toLowerCase(),
+                          'value' in el ? String(el.value) : (el.isContentEditable ? el.innerText : null)]""")
+        except Exception:  # noqa: BLE001
+            return ""
+        if kind == "password" or value is None:
+            return ""
+        shown, wanted = clean_text(value), clean_text(typed)
+        if shown == wanted:
+            return ""
+        if same_value(wanted, shown):
+            return f'; the field shows it as "{shown[:80]}"'
+        return (f'; BUT the field now holds "{shown[:80]}", not what was typed: it changed or refused the value. '
+                "Read the field's hint and correct it before you move on")
 
     async def select(self, aid, value: str) -> str:
         locator = self._locator(aid)
@@ -615,17 +638,21 @@ class Tab:
         return outcome
 
     async def collect(self, aid, max_pages: int = 10) -> str:
-        """Follow the paging control the model chose until it is gone, and return every page as one document."""
+        """Follow the paging control the model chose until it is gone, and return every page as one document.
+        `last_collect` records how it ended: a list that stopped at the page limit with its control still there is
+        not complete, and the answer says so instead of passing for the whole list."""
+        self.last_collect = None
         locator = self._locator(aid)
         if locator is None or await locator.count() == 0:
             return f"there is no element [{aid}] on the page any more"
         info = await self._describe(locator)
         if not info["name"]:
             return f"[{aid}] has no label to follow from page to page"
-        first = self.document
+        first, start = self.document, self.page.url
         pages, seen = [first], {first}
-        for _ in range(max(1, min(int(max_pages or 10), 30)) - 1):
-            control = None
+        limit = max(1, min(int(max_pages or 10), 30))
+
+        async def next_control():
             for _, _, frame in self.frames:
                 candidates = frame.locator("a[href], button, [role=button], [role=link]")
                 for index in range(min(await candidates.count(), 200)):
@@ -633,14 +660,20 @@ class Tab:
                     try:
                         label = clean_text(await candidate.evaluate("el => el.innerText || el.value || el.getAttribute('aria-label') || ''"))[:80]
                         if label == info["name"] and (await candidate.evaluate("el => el.tagName")) == info["tag"] \
-                                and not await candidate.evaluate("el => el.disabled === true"):
-                            control = candidate
-                            break
+                                and not await candidate.evaluate(
+                                    "el => el.disabled === true || el.getAttribute('aria-disabled') === 'true'"):
+                            return candidate
                     except Exception:  # noqa: BLE001
                         continue
-                if control:
-                    break
+            return None
+
+        capped = False
+        for turn in range(limit):
+            control = await next_control()
             if control is None:
+                break
+            if turn == limit - 1:  # the page limit ended this, not the list: the control is still there
+                capped = True
                 break
             try:
                 await control.click(timeout=2500)
@@ -654,8 +687,13 @@ class Tab:
                 break
             seen.add(self.document)
             pages.append(self.document)
+        self.last_collect = {"where": start, "control": info["name"], "pages": len(pages), "capped": capped}
+        more = (f' THE LIST IS NOT COMPLETE: this stopped at the limit of {limit} page(s) and "{info["name"]}" is '
+                "still there. Collect again from this page (a higher max_pages reads further) before you treat the "
+                "list as complete." if capped else "")
         if len(pages) == 1:
-            return f'"{info["name"]}" led to no further page; the list is the page you see'
+            return (f"max_pages {limit} reads only the page you see." + more if capped
+                    else f'"{info["name"]}" led to no further page; the list is the page you see')
         # A button may append rows in place rather than lead to a new page. Compare page bodies without generated
         # element ids or the changing paging control: both change between reads even when every earlier row remains.
         def body(page: str) -> str:
@@ -668,10 +706,12 @@ class Tab:
                          for earlier, later in zip(bodies, bodies[1:])))
         if grows:  # a "load more" control: the last page holds every row
             self.document = pages[-1]
-            return f'followed "{info["name"]}" {len(pages) - 1} time(s); the list is now complete on the page'
+            return (f'followed "{info["name"]}" {len(pages) - 1} time(s); '
+                    + ("the rows loaded so far are on the page." + more if capped
+                       else "the list is now complete on the page"))
         self.document = "\n".join(f"{PAGE_BREAK} {number} =====\n{page}" for number, page in enumerate(pages, 1))
-        return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one. COLLECTED DOCUMENT '
-                f"(file it with keep if it is relevant):\n{without_ids(self.document)[:MAX_OBSERVATION * 2]}")
+        return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one.{more} COLLECTED '
+                f"DOCUMENT (file it with keep if it is relevant):\n{without_ids(self.document)[:MAX_OBSERVATION * 2]}")
 
     async def fetch(self, aid) -> str:
         """Download what the chosen link points to and read it as a document."""

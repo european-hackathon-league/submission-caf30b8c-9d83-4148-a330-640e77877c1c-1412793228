@@ -15,7 +15,9 @@ import time
 from typing import Awaitable, Callable
 
 import llm
+import sanity
 from browser_env import Tab
+from coverage import Ledger
 
 ACTIONS_HELP = """Reply with ONE JSON object: {"thought": "<one or two short sentences: what the page tells you and what you do next>", "actions": [ ... ]}.
 The actions run in order. Once an action loads another page the rest of the list is dropped, because the element
@@ -83,6 +85,7 @@ class Agent:
         self.guard = guard  # a sanity check that may veto a browser action before it runs (sanity.py)
         self.turns: list[dict] = []
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
+        self.coverage = Ledger()  # what this agent really opened, typed and followed (coverage.py)
         self.steps = 0
         self.started = time.time()
 
@@ -126,6 +129,14 @@ class Agent:
             return await tab.fetch(action.get("id"))
         return f'unknown action "{do}"'
 
+    def _may_close(self, action: dict) -> str | None:
+        """An action that closes a question ({"question": ..., "status": "complete" | "absent"}) is checked against
+        what the agent really did on its website, not against what it says it did. None lets the action run."""
+        status = str(action.get("status", "")).strip().lower()
+        if "question" not in action or status not in ("complete", "absent") or not sanity.enabled("coverage_gate"):
+            return None
+        return self.coverage.gate(str(action.get("question", "")).strip("[] "), status)
+
     async def _alive(self) -> bool:
         try:
             return bool(await self.tab.page.main_frame.evaluate("() => document.querySelectorAll('[data-aid]').length > 0"))
@@ -154,6 +165,7 @@ class Agent:
                 page = f"(the page did not finish loading within {STEP_TIMEOUT} s; reload it or go elsewhere)"
             except Exception as error:  # noqa: BLE001
                 page = f"(the page could not be read: {str(error)[:200]})"
+            self.coverage.saw(page)
             results.extend(self.tab.take_events())
             done_text = "\n".join(f"{n}. {text}" for n, text in enumerate(results, 1)) or "(none yet)"
             left = int(self.deadline - time.time())
@@ -207,6 +219,10 @@ class Agent:
                     results.append("waited two seconds")
                     continue
                 if do in self.extra:
+                    refusal = self._may_close(action)
+                    if refusal:
+                        results.append(refusal)
+                        continue
                     try:
                         results.append(await self.extra[do](action))
                     except Exception as error:  # noqa: BLE001
@@ -227,6 +243,10 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
+                if do == "fill":
+                    self.coverage.typed(before, action.get("text", ""))
+                elif do == "collect":
+                    self.coverage.followed(getattr(self.tab, "last_collect", None))
                 # Do not trust a successful browser call by itself: enterprise
                 # portals often swallow a click or reject a field silently.
                 # The next model turn gets a compact, actionable state-delta
@@ -236,6 +256,7 @@ class Agent:
                         after = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
                         changed = state_fingerprint(page) != state_fingerprint(after)
                         if changed:
+                            self.coverage.moved()
                             results.append(f"verification: {do} visibly changed the page state")
                         else:
                             results.append(f"verification: {do} caused no visible page change; inspect the control "
