@@ -128,12 +128,14 @@ class Agent:
             except asyncio.TimeoutError:
                 results.append(f"opening {self.tab.base_url} took longer than {STEP_TIMEOUT} s; reload or try again")
         repeats, last_signature, failures = 0, "", 0
+        stuck = 0  # page reads and navigations in a row that timed out or failed: the tab may be broken
         while self.steps < self.max_steps and time.time() < self.deadline:
             self.steps += 1
             clock = time.time()
             try:
                 page = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
             except asyncio.TimeoutError:
+                stuck += 1
                 page = f"(the page did not finish loading within {STEP_TIMEOUT} s; reload it or go elsewhere)"
             except Exception as error:  # noqa: BLE001
                 page = f"(the page could not be read: {str(error)[:200]})"
@@ -204,12 +206,23 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
+                if do in NAVIGATING:
+                    failed = any(sign in str(result) for sign in ("Timeout", "timed out", "took longer", "detached", "ERR_ABORTED"))
+                    stuck = stuck + 1 if failed else 0
                 if do in ("collect", "fetch"):
                     self.held = (self.tab.document, self.tab.document_source)
                 elif do in NAVIGATING:
                     self.held = None
                 if do in NAVIGATING or self.tab.page.url != before or not await self._alive():
                     moved = True
+            if stuck >= 2:  # the same tab failed twice in a row: carry on in a fresh one (browser_env.Tab.renew)
+                stuck = 0
+                try:
+                    renewed = await asyncio.wait_for(self.tab.renew(), STEP_TIMEOUT)
+                    results.append("this tab kept failing to load, so it was replaced by a fresh one: " + renewed)
+                except Exception as error:  # noqa: BLE001
+                    results.append(f"replacing the stuck tab failed: {str(error)[:150]}")
+                self.held = None
             self.log(f"(read {read_s:.1f}s, model {model_s:.1f}s, act {time.time() - clock:.1f}s) {thought} | "
                      f"{json.dumps(actions, ensure_ascii=False)[:400]} | " + " ; ".join(r[:160] for r in results))
             if repeats >= 2:

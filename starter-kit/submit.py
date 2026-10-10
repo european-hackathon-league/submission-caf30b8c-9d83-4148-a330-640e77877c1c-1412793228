@@ -220,12 +220,6 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     sheet = bid_sheet(bid)
     system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
-<<<<<<< Updated upstream
-                          sheet=json.dumps(bid_sheet(bid), ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
-    clerk = Agent("submit", tender_tab, system, heading,
-                  extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize}, deadline=deadline,
-                  max_steps=CLERK_STEPS, think=CLERK_THINKS)
-=======
                           sheet=json.dumps(sheet, ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
     if sanity.enabled("no_guessed_mailbox") and not bidder.get("email"):
         system += ("\nTHE BIDDER'S E-MAIL ADDRESS IS NOT KNOWN YET. If the form asks for it, get it with ask_mail (the "
@@ -235,9 +229,9 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         guard.allow(sheet)
         guard.allow(bidder)
         guard.allow(reference)
-    clerk = Agent("submit", tender_tab, system, heading, extra={"ask_mail": ask_mail}, deadline=deadline,
+    clerk = Agent("submit", tender_tab, system, heading,
+                  extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize}, deadline=deadline,
                   max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=guard)
->>>>>>> Stashed changes
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
