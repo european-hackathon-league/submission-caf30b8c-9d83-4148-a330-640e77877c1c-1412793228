@@ -107,7 +107,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| ~23:30 | run_bb0655a2 | Maria | branch `maria/escalation` **f1867df**: + "steps" action (whole form step in one turn) | running | | | | Measures the bid-form time: was 40-46 turns / 3.5-4.5 min in every clean run |
+| 23:13 | **run_bb0655a2** | Maria | branch `maria/escalation` **f1867df**: + "steps" action | **100** 🎉 | ✅ | 10.4 min | 237 / $0.26 | Clean: investigation 386 s, 0 timeouts. Clerk **37 turns / 241 s** (before: 40-46 / 207-284 s): it used `steps` 7× (bidder data, all amounts of each position, discount), all ran fine, but still did the configurator cascade (attribute → apply) one choice per turn. Next: have the cascade go into `steps` too. Side effect: the clerk got a "going in circles" hint while filling 5 similar positions (false positive) |
 | 22:37 | **run_05d351d6** | Maria | branch `maria/escalation` **ae31fb3** | **100** 🎉 | ✅ | 11.7 min | 230 / $0.29 | Retry of 9f5d8f25. Clean: investigation 421 s, no open questions, 0 timeouts, longest repeat 4×. No agent got stuck, so **no escalated turn was needed**: this shows escalation does no harm, not yet what it adds |
 | 22:37 | run_9f5d8f25 | Maria | branch `maria/escalation` **ae31fb3** | **– (platform failure, doesn't count)** | | 7.2 min | 80 / $0.07 | Atira: "The platform failed, not your agent system… started again automatically" |
 | 22:48 | run_f2032d98 | Vamshidhar | ? | running | | | | |
