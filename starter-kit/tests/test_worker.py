@@ -1,5 +1,7 @@
 """The generic action verifier must expose silent portal failures to the model."""
+import asyncio
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -296,3 +298,31 @@ class CircleDetection(unittest.IsolatedAsyncioTestCase):
             outcome = await Agent("test", FakeTab(False), "system", lambda: "job", max_steps=30, idle=idle).run()
         self.assertTrue(outcome["done"])
         self.assertEqual(idled, [14])  # sent idle after six identical rounds, not after the 30-step cap
+
+
+class TeamWakeup(unittest.IsolatedAsyncioTestCase):
+    """Sandbox run 024bd2ac: the ERP agent went idle while documents were still being read, with its material
+    questions already open. They were never new, so nothing woke it for 400 s."""
+
+    class FakeCase:
+        def __init__(self):
+            self.version, self.pending, self.news = 0, 1, {}
+            self.open = [("material:A-1", "the ERP material for requirement A-1")]
+
+        def questions(self):
+            return self.open
+
+        async def wait_change(self, version, timeout):
+            await asyncio.sleep(0.01)
+            return self.version != version
+
+    async def test_idle_agent_is_woken_when_the_documents_it_waited_for_are_read(self):
+        from agent import Team
+        case = self.FakeCase()
+        team = Team(case, ["erp", "mail"], deadline=time.time() + 5)
+        hold = asyncio.create_task(team.hook("erp")("done"))
+        await asyncio.sleep(0.05)
+        self.assertFalse(hold.done())  # still waiting: nothing has been read yet
+        case.pending, case.version = 0, 1  # the requirements extraction is done; the question was open before
+        news = await asyncio.wait_for(hold, 2)
+        self.assertIn("material:A-1", news or "")

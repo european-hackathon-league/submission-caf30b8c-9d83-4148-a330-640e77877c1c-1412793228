@@ -96,11 +96,16 @@ class Team:
         self.case, self.names, self.deadline = case, set(names), deadline
         self.idle: set[str] = set()
         self.finished = asyncio.Event()
+        self.woken: dict[str, float] = {}  # when an agent was last woken for finished reading (at most every 30 s)
 
     def hook(self, name: str):
         async def hold(why: str) -> str | None:
             version = self.case.version
             before = {qid for qid, _ in self.case.questions()}
+            # Documents still being read when the agent went idle: once one of them is done, the agent is woken if
+            # questions are still open. Sandbox run 024bd2ac: the ERP agent went idle "until the requirements are
+            # read" with its material questions already open; they were never new, so it slept for 400 s.
+            reading = self.case.pending
             self.idle.add(name)
             try:
                 while not self.finished.is_set() and time.time() < self.deadline:
@@ -112,6 +117,12 @@ class Team:
                         fresh = {qid for qid, _ in self.case.questions()} - before
                         if fresh or self.case.news.get(name):
                             return "The case file has news" + (f"; new open questions: {', '.join(sorted(fresh))}" if fresh else "") + "."
+                        still_open = {qid for qid, _ in self.case.questions()}
+                        rested = time.time() - self.woken.get(name, 0.0) >= 30
+                        if reading and self.case.pending < reading and still_open and rested:
+                            self.woken[name] = time.time()
+                            return ("Documents that were still being read are now in the case file. Open questions: "
+                                    f"{', '.join(sorted(still_open))}. Work on those your website can answer.")
                     elif self.idle == self.names and self.case.pending == 0:
                         self.finished.set()
                 return None
