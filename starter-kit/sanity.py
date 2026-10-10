@@ -36,6 +36,9 @@ REGISTRY: dict[str, Check] = {check.name: check for check in (
     Check("agent_restart", "an investigator that stops unfinished",
           "an agent that ended at its step limit or in a loop while its questions are still open: one fresh restart "
           "(new tab, new conversation) while at least 2 minutes of investigation remain", True),
+    Check("single_code_request", "the bid clerk's clicks after it asked for the signing code",
+          "a second code request before the first code came back: it voids the code on its way (run a85be021 "
+          "lost its signature this way)", True),
     Check("grounding", "every fact the extraction returns",
           "extracted numbers, keys and identifiers that do not appear in the page they came from", True,
           default=False),  # off until a sandbox run shows it helps: it could also drop a value written differently

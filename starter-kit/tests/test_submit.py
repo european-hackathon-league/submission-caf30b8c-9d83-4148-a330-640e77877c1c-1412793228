@@ -269,6 +269,19 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         self.assertIn("found nothing", script.turns("submit")[1]["user"])
         self.assertIn('answers: "CODE-2"', script.turns("submit")[2]["user"])
 
+    async def test_a_second_code_request_before_the_code_came_back_is_blocked(self):
+        # sandbox run a85be021: request, the courier finds nothing once, the clerk requests again (voiding the first
+        # code) and the deadline hits. The second click must not reach the portal until the courier searched twice.
+        request = {"thought": "", "actions": [{"do": "click", "id": 7}]}
+        ask = {"thought": "", "actions": [{"do": "ask_mail", "task": "the signing code"}]}
+        script = Script(submit=[request, ask, request, done(summary="stopped")],
+                        courier=[done(summary="the new message has not arrived")])
+        tender = FakeTab("tender", 'Signing\n[7] button "Request TAN"')
+        with patch.object(llm, "chat_json", script):
+            await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertEqual([step for step in tender.done if step == ("click", 7)], [("click", 7)])
+        self.assertIn("blocked", script.turns("submit")[3]["user"])
+
     async def test_clerk_recovers_from_an_interrupted_session_before_review(self):
         class RestoringTab(FakeTab):
             async def login(self):

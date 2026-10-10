@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from decimal import Decimal
 
@@ -173,7 +174,34 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         except Exception:  # noqa: BLE001  no second tab: fall back to the investigators' one
             courier_tab = mail_tab
 
+    # The control that requested the signing code: clicking it again before a code came back voids the code that is
+    # on its way (sandbox run a85be021 lost its signature this way). Recorded when the clerk first asks the mailbox.
+    code_request = {"label": None, "searches": 0, "last_click": None}
+
+    def _label_of(aid) -> str | None:
+        user = clerk.turns[-1]["user"] if clerk.turns else ""
+        match = re.search(rf'\[{re.escape(str(aid))}\] [a-z ]*?"([^"]+)"', user)
+        return match.group(1).strip() if match else None
+
+    def clerk_guard(action: dict) -> str | None:
+        veto = guard(action) if guard is not None else None
+        if veto:
+            return veto
+        # Bounded: after two searches that found nothing the code may really be lost, and a fresh request is allowed.
+        label = _label_of(action.get("id")) if action.get("do") == "click" else None
+        if (sanity.enabled("single_code_request") and label and code_request["label"]
+                and not codes and code_request["searches"] < 2 and label == code_request["label"]):
+            return (f'blocked: "{code_request["label"]}" was already used and no code has come back yet. A new '
+                    "request makes the code already on its way invalid. Ask the mailbox colleague again (ask_mail) "
+                    "and say exactly what to look for: the newest code mail for this tender.")
+        if label:
+            code_request["last_click"] = label  # read from the page the clerk acted on, before the click happens
+        return None
+
     async def ask_mail(action: dict) -> str:
+        if code_request["label"] is None:
+            code_request["label"] = code_request["last_click"]  # the control that asked for the code
+        code_request["searches"] += 1
         task = str(action.get("task") or "").strip()
         if not task:
             return 'ask_mail needs a "task": say what you need from the mailbox and how to recognise it'
@@ -271,7 +299,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         guard.allow(reference)
     clerk = Agent("submit", tender_tab, system, heading,
                   extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize}, deadline=deadline,
-                  max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=guard)
+                  max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=clerk_guard)
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
