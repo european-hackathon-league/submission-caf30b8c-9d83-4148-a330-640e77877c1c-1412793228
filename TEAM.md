@@ -89,6 +89,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 20:52 | run_143ae323 | Vamshidhar | ? | running | | | | |
 | 20:50 | run_64397a5e | Maria | branch `maria/erp-loop-fixes` 9ba31c0 (same starter-kit as 5ee465a) | running | | | | **Reproducibility check** of the branch-and-bound winner (passes both local bounds; 100 in 10.3 min in 2b8b5ca8). Test run only, no submission |
 | 20:50 | run_c593918d | Vamshidhar | ? | running | | | | |
 | 20:50 | run_cf7ab2ec | Vamshidhar | ? | running | | | | |
