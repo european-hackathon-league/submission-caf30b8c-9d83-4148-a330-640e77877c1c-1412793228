@@ -106,7 +106,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 21:59 | run_c9f3431c, run_0c9769e1 | Vamshidhar | ? | provisioning | | | | |
+| 21:59 | **run_0c9769e1** | Vamshidhar | `vamshidhar/reliable-calls` **on Maria's branch 288c88c** (browser failover) + uncommitted: 30 s call cap + backup request, changed-fact notice | **100** 🎉 | ✅ | **8.9 min** 🏆 | 239 / $0.33 | **Our fastest 100.** Clean: investigation 295 s, 0 model timeouts, longest repeat 6× |
+| 21:59 | run_c9f3431c | Vamshidhar | same as 0c9769e1 | – | | | 0 calls | **Platform failure** (Atira: "The platform failed, not your agent system"); does not count |
 | 21:37 | **run_2807dc37** | Vamshidhar | package 2a5086da (no label) | **100** 🎉 | ✅ | 12.8 min | 205 / $0.27 | Clean: investigation 416 s, longest repeat 4×, 1 timeout |
 | 21:36 | run_747dd4ad | Vamshidhar | package 2a5086da (same as 2807dc37) | **10** | ✅ | 15.3 min | 104 / $0.14 | **Outage**: 18 model calls without reply, 4 page loads timed out. Same package scored 100 a minute later |
 | 20:53 | **sub_ce82715c (SUBMISSION, Vamshidhar)** → run_6baaba90 | Vamshidhar | **v1** (package 47e1f6ce, same as 44a626ef) | **100** 🎉 | ✅ | 11.0 min | 237 / $0.28 | Review **passed** ✅: the latest passed submission, i.e. **our final package**. **v1 reproduced: 2 of 2 clean runs at 100** (9.6 and 11.0 min) |
