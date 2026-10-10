@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import agent  # noqa: E402
 from agent import Team, questions_for_site  # noqa: E402
 
 
@@ -51,6 +52,19 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([qid for qid, _ in questions_for_site("mail", questions)],
                          ["discount", "reserve:REQ-2"])
         self.assertEqual(questions_for_site("new-portal", questions), questions)
+
+    def test_routing_follows_the_roles_read_from_the_brief_not_the_site_names(self):
+        """The private dataset uses other site names (brief: other software, layout and site names)."""
+        questions = [("positions", "p"), ("material:REQ-1", "m"), ("discount", "d"), ("reserve:REQ-2", "r")]
+        try:
+            agent.SITE_ROLES.update({"erp": "warenwirtschaft", "mail": "postfach"})
+            self.assertEqual([q for q, _ in questions_for_site("warenwirtschaft", questions)], ["material:REQ-1"])
+            self.assertEqual([q for q, _ in questions_for_site("postfach", questions)], ["discount", "reserve:REQ-2"])
+            # a site that merely contains "mail" in its name but is not the mailbox gets everything
+            self.assertEqual(questions_for_site("mailing-list-portal", questions), questions)
+        finally:
+            agent.SITE_ROLES.clear()
+
 
     async def test_erp_idle_hook_ignores_new_mail_questions(self):
         case = FakeCase()

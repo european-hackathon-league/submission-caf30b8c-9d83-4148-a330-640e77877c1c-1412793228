@@ -117,6 +117,7 @@ CONTEXT_SHAPE = """From the task brief, as JSON:
 {"tender_reference": "<the tender's reference>", "scenario_date": "<ISO timestamp>", "company_name": "<the bidder's company name>",
  "vat_id": "<the bidder's VAT id or null>",
  "mail_site": "<the id, from the list of this run's websites, of the webmail that holds the sales mailbox>",
+ "erp_site": "<the id, from the list of this run's websites, of the company's ERP or inventory system (materials, stock, price conditions)>",
  "authorized_senders": {"discount_approval": "<mailbox local part the brief authorizes for discount approvals>",
    "condition_rules": "...", "price_indices": "...", "tech_release": "...", "packaging_tariffs": "...",
    "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."}}

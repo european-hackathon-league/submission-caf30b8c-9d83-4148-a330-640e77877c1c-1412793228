@@ -187,14 +187,24 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     return agent
 
 
+# Which website plays which role in this run, as the model read it from the brief (solve). The private dataset uses
+# other site names, so routing goes by role first and falls back to the public site names only without one.
+SITE_ROLES: dict[str, str] = {}
+
+
 def questions_for_site(site_id: str, questions: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Keep specialized mail and ERP agents on questions their portal can resolve (from Vamshidhar's v1 package,
     sandbox run 44a626ef: 100 in 9.6 min, every agent finished by itself)."""
     site = site_id.casefold()
-    if "erp" in site:
+
+    def plays(role: str) -> bool:
+        named = (SITE_ROLES.get(role) or "").casefold()
+        return site == named if named else role in site
+
+    if plays("erp"):
         prefixes = ("material:", "data:")
         return [(qid, text) for qid, text in questions if qid.startswith(prefixes)]
-    if "mail" in site:
+    if plays("mail"):
         prefixes = ("condition_group:", "packaging_tariff:", "delivery_commitment:", "setup_pool:",
                     "project_bonus:", "index:", "fx:", "reserve:")
         return [(qid, text) for qid, text in questions if qid in ("mailbox", "discount") or qid.startswith(prefixes)]
@@ -226,6 +236,9 @@ async def solve(task: dict, playwright) -> dict | None:
     brief = task["brief"]
     listing = "\n".join(f"- {site['siteId']}: {site['url']}" for site in sites)
     context = await read_context(brief + f"\n\nThe websites of this run:\n{listing}")
+    SITE_ROLES.clear()
+    SITE_ROLES.update({role: str(context.get(f"{role}_site") or "") for role in ("erp", "mail")
+                       if str(context.get(f"{role}_site") or "") in {site["siteId"] for site in sites}})
     case = CaseFile(brief, context)
     print(f"Sanity checks on: {', '.join(sanity.active()) or 'none'}", flush=True)
     print(f"Context: tender {case.reference}, scenario {case.scenario.isoformat()}, company {case.company}, "
