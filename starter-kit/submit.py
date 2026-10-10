@@ -105,11 +105,10 @@ asks you for something from the mailbox, usually the one-time signing code (TAN)
 How to work
 - The request heads every turn, together with the answers you gave earlier in this run.
 - Codes expire. The mailbox can hold older codes, codes for other tenders whose references look alike, and
-  unrelated mail with similar subjects. The one that counts is the newest sent message that matches the request (never
-  an unsent draft). Open the message itself and check its reference, sent status and time before you answer: a row in
-  a list is not enough.
-- A newly requested signing code arrives as new incoming mail in the inbox (not in archive or drafts). Unlock the
-  inbox and reload if the new message is not visible yet.
+  unrelated mail with similar subjects. The one that counts is the newest message that matches the request. Open
+  the message itself and check its reference and time before you answer: a row in a list is not enough.
+- Lists can be paged, sorted either way and split over folders, and new mail may only show after a reload. If the
+  message is not there yet, reload and look again a few times.
 - Log in again if the webmail asks.
 - Finish with done and put ONLY the value asked for in "answer": a code exactly as written, nothing around it.
   If you cannot find it, finish with done without "answer" and say in "summary" what you saw instead.
