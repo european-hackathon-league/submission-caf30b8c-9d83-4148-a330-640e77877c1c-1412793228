@@ -21,7 +21,8 @@ MODEL = "qwen"
 MAX_CONCURRENT = 16  # the team's limit is 32 across all its runs, and test runs may overlap
 ATTEMPTS = 5
 CALL_TIMEOUT = 150  # seconds: a model that scaled to zero is slow to answer its first call
-WARM_TIMEOUT = 75  # once a call has come back the model is awake; a reply this late is stuck, ask again
+WARM_TIMEOUT = 75  # a quick call (thinking off) this late once the model is awake is stuck: ask again.
+# Calls with thinking on (fact extraction) keep CALL_TIMEOUT: under load they legitimately take longer.
 MAX_TOKENS_CEILING = 16000  # a reply cut off by its token limit is asked again with twice the room, up to this
 PERMANENT = (400, 401, 403, 404, 413, 422)  # asking again rarely helps: one more try, then give up
 # The hosted Qwen's simulated prices in USD per million tokens, for the estimate in `summary`.
@@ -105,7 +106,7 @@ async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int
                         model=MODEL, messages=conversation, temperature=0, max_tokens=max_tokens,
                         response_format={"type": "json_object"},
                         extra_body={"chat_template_kwargs": {"enable_thinking": think}}),
-                        WARM_TIMEOUT if _warm["done"] else CALL_TIMEOUT)
+                        WARM_TIMEOUT if _warm["done"] and not think else CALL_TIMEOUT)
                     _warm["done"] = True
                 finally:
                     spent = time.monotonic() - started
@@ -127,7 +128,7 @@ async def chat_json(messages: list[dict], *, think: bool = True, max_tokens: int
                 conversation = [*messages, {"role": "assistant", "content": content[:2000]},
                                 {"role": "user", "content": REMINDER}]
         except asyncio.TimeoutError:
-            problem = f"no reply within {WARM_TIMEOUT if _warm['done'] else CALL_TIMEOUT} s"
+            problem = f"no reply within {WARM_TIMEOUT if _warm['done'] and not think else CALL_TIMEOUT} s"
         except APIStatusError as error:
             problem = f"HTTP {error.status_code}: {str(error)[:200]}"
             permanent = error.status_code in PERMANENT

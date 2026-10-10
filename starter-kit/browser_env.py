@@ -109,7 +109,7 @@ SNAPSHOT_JS = r"""
       const options = [...el.options].slice(0, 80).map(o => (o.selected ? '*' : '') + (clean(o.textContent) === o.value ? q(o.value) : q(o.value) + '=' + q(o.textContent)));
       return tag(el, collapsed) + ' select ' + q(labelOf(el)) + flags(el) + ' options(* = selected): ' + options.join('; ') + (el.options.length > 80 ? '; …' : '');
     }
-    if (t === 'SUMMARY') return null;
+    if (t === 'SUMMARY') return tag(el, collapsed) + ' toggle ' + q(nameOf(el)) + (el.parentElement && el.parentElement.open ? ' [open]' : ' [closed]') + flags(el);
     if (['link', 'tab', 'menuitem', 'option', 'checkbox', 'radio', 'switch', 'treeitem'].includes(role) || el.hasAttribute('onclick') || el.isContentEditable && !el.parentElement.isContentEditable)
       return tag(el, collapsed) + ' ' + (role || 'clickable') + ' ' + q(nameOf(el)) + flags(el) + dataHints(el) + descr(el);
     return null;
