@@ -22,6 +22,14 @@ from worker import ACTIONS_HELP, Agent
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
 MAIL_BUDGET = 120  # seconds one request to the mailbox may take
 CLERK_STEPS, COURIER_STEPS = 120, 25
+# The clerk's hint when it goes in circles (run d3ca14df: 95 turns of "fill the position, add it, empty again" until
+# its step cap, never signed). The brief's rule 9: every bid form lets a position be left out explicitly, and a
+# signed bid with one position left out keeps the others' points; an unsigned one scores nothing.
+CLERK_CIRCLE_HINT = (
+    "You are going in circles: the same steps keep repeating without progress. Read the page for an error or hint "
+    "next to the fields and fix exactly that. If this one position still cannot be saved, leave it out with the "
+    "form's explicit way of omitting a position and go on with the others and the signature: a signed bid keeps the "
+    "points of every position it has; an unsigned one scores nothing.")
 # How often the final step is held back because the page does not show the bid (preflight "unproven"). The wait is
 # bounded: a signed bid scores, an unsigned one does not.
 UNPROVEN_REFUSALS = 2
@@ -305,7 +313,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         guard.allow(reference)
     clerk = Agent("submit", tender_tab, system, heading,
                   extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize}, deadline=deadline,
-                  max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=clerk_guard)
+                  max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=clerk_guard,
+                  circle_hint=CLERK_CIRCLE_HINT)
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")

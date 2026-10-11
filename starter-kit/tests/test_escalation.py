@@ -46,9 +46,8 @@ class Escalation(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome["done"])  # still given up on (sent idle) when the stronger turn did not help
         self.assertLess(len(calls), 30)  # well before the recording runs out
 
-    async def test_the_bid_clerk_is_never_escalated(self):
-        """The clerk fills every position the same way on purpose; an escalated turn mid-form only costs time."""
-        replies = [{"thought": "select and apply", "actions": [{"do": "fill", "id": 1, "text": str(i)}]} for i in range(20)]
+    async def clerk_calls(self, thoughts):
+        replies = [{"thought": t, "actions": [{"do": "fill", "id": 1, "text": str(i)}]} for i, t in enumerate(thoughts)]
         calls = []
 
         async def model(messages, **kwargs):
@@ -56,8 +55,20 @@ class Escalation(unittest.IsolatedAsyncioTestCase):
             return replies.pop(0) if replies else {"thought": "end", "actions": [{"do": "done", "summary": "end"}]}
 
         with patch.dict(os.environ, {"SANITY_CHECKS": "default"}), patch.object(llm, "chat_json", model):
-            await Agent("submit", ScreenshotTab(True), "system", lambda: "job", max_steps=25).run()
+            await Agent("submit", ScreenshotTab(True), "system", lambda: "job", max_steps=len(thoughts) + 3).run()
+        return calls
+
+    async def test_the_clerk_filling_similar_positions_is_not_escalated(self):
+        """Run bb0655a2: the same per-position pattern spread over the form is not a loop."""
+        cycle = ["choose the bore and apply", "choose the stroke and apply", "choose the mounting and apply",
+                 "fill the amounts", "save the position", "open the next position"]
+        calls = await self.clerk_calls([cycle[i % 6] for i in range(24)])
         self.assertNotIn("submit:escalated", calls)
+
+    async def test_the_clerk_in_a_strict_loop_gets_one_escalated_turn(self):
+        """Run d3ca14df: "fill the fields, add the position" / "the fields are empty again" for 95 turns."""
+        calls = await self.clerk_calls(["the fields are filled, add the position", "the fields are empty again"] * 10)
+        self.assertEqual(calls.count("submit:escalated"), 1)
 
     async def test_switched_off_there_is_no_escalated_turn(self):
         _, calls = await run_looping_investigator("validator")

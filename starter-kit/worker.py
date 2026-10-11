@@ -64,6 +64,7 @@ STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung pag
 FULL_TURNS = 2  # how many past turns stay word for word; older ones keep the reasoning and drop the page text
 NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps"}
 STEPS_LIMIT, STEPS_TIMEOUT = 30, 240  # one "steps" action: at most this many steps, and seconds in all
+ALERT = re.compile(r"\((?:alert|status)\)[^\n]*")  # a message the page announces to screen readers (Tab.observe)
 CONTROL = re.compile(r'\[(\d+)\] (?:\(in collapsed menu\) )?(select|input(?:\(\w+\))?|button|checkbox|radio|link|clickable|switch) "([^"]*)"([^\[]*)')
 
 
@@ -204,8 +205,15 @@ class Agent:
             veto = self.guard(action) if self.guard else None
             if veto:
                 return f"ran {len(done)} of {len(steps)} steps" + (": " + "; ".join(done) if done else "") + f". Step {number} was refused: {veto}"
+            alerts_before = set(ALERT.findall(page))
             result = await asyncio.wait_for(self._browser(action), STEP_TIMEOUT)
             done.append(f'{number}. {label}: {str(result)[:80]}')
+            if action["do"] == "click":  # a press can bring an error message: stop there instead of filling on blindly
+                after = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
+                new = [a for a in ALERT.findall(after) if a not in alerts_before]
+                if new:
+                    return (f"ran {len(done)} of {len(steps)} steps: " + "; ".join(done) +
+                            f". After step {number} the page says: {' / '.join(new)[:300]}. Fix that before going on.")
             if any(word in str(result) for word in ("has no option", "did not change", "is disabled", "BUT the field")):
                 return f"ran {len(done)} of {len(steps)} steps: " + "; ".join(done) + f". Step {number} did not take; check it."
         return f"ran all {len(done)} steps: " + "; ".join(done)
@@ -309,10 +317,9 @@ class Agent:
             # courier stress test where "unlock the list" and "open the newest message" alternated for 19 turns, or
             # the same thought three times within the last 16 turns, as in sandbox run e3804980 where the ERP agent
             # rejected the same material every 6 turns for 46 turns.
-            circling = (
-                (len(recent) >= 3 and len(set(recent[-3:])) == 1)
-                or (len(recent) >= 4 and recent[-1] == recent[-3] and recent[-2] == recent[-4] and recent[-1] != recent[-2])
-                or recent[-16:].count(recent[-1]) >= 3)
+            strict = ((len(recent) >= 3 and len(set(recent[-3:])) == 1)
+                      or (len(recent) >= 4 and recent[-1] == recent[-3] and recent[-2] == recent[-4] and recent[-1] != recent[-2]))
+            circling = strict or recent[-16:].count(recent[-1]) >= 3
             if circling and (not self.finish_on_repeat or not self._circle_hinted):
                 circling = False  # a concrete way out first; only an agent with finish_on_repeat is then forced to finish
                 if len(recent) - self._circle_hinted_at >= 6:  # once every 6 turns at most
@@ -323,8 +330,11 @@ class Agent:
                     self._circle_hint = self.circle_hint
                     # The second time: also one stronger turn, reasoning on and with a screenshot (sanity plugin
                     # "escalation"), before the agent is given up on at the third. Investigators only (they have an
-                    # idle hook): the bid clerk repeats the same pattern for every position on purpose (run bb0655a2).
-                    if self._circle_hints == 2 and self.idle and self.escalations < ESCALATION_LIMIT and sanity.enabled("escalation"):
+                    # idle hook); the bid clerk, which repeats one pattern for every position on purpose (run bb0655a2), only on a
+                    # strict loop: the same thought three times or two alternating (run d3ca14df: 95 turns of "fill,
+                    # add position, empty again" until its step cap, never signed).
+                    if self._circle_hints == 2 and (self.idle or strict) and self.escalations < ESCALATION_LIMIT \
+                            and sanity.enabled("escalation"):
                         self._escalate = True
             if circling:
                 final = await llm.chat_json(self._messages(

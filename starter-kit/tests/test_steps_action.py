@@ -108,6 +108,29 @@ class StepsAction(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("continued", form.values)  # nothing after the refused step ran
 
 
+class RejectingForm(CascadeForm):
+    """Its "Continue" is refused with a message the page announces, and the form shows empty again."""
+
+    async def click(self, aid):
+        if str(aid) == self.ids()["next"]:
+            self.rejected = True
+            return "clicked; the page reloaded"
+        return await super().click(aid)
+
+    async def observe(self):
+        page = await super().observe()
+        return page + ("\n(alert) Lieferzeit fehlt" if getattr(self, "rejected", False) else "")
+
+
+class StepsStopAtErrors(unittest.IsolatedAsyncioTestCase):
+    async def test_an_error_message_after_a_press_stops_the_chain_and_is_reported(self):
+        """Run d3ca14df: the form rejected the position, the chain reported success, the clerk looped 95 turns."""
+        form = RejectingForm()
+        _, seen = await run(form)
+        self.assertIn("After step 6 the page says: (alert) Lieferzeit fehlt", seen[1])
+        self.assertNotIn("ran all", seen[1])
+
+
 class FindControl(unittest.TestCase):
     PAGE = ('[4] select "Bore" options: "40"\n[5] button "Apply"\n[6] button "Apply all" (disabled)\n'
             '[7] input "Unit price net" value=""\n[8] button "Open" [9] button "Open"')
