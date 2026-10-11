@@ -22,6 +22,7 @@ from worker import ACTIONS_HELP, Agent
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
 MAIL_BUDGET = 120  # seconds one request to the mailbox may take
 CLERK_STEPS, COURIER_STEPS = 120, 25
+TURNS_RESERVE = 25  # clerk turns kept for leaving out what is not entered, signing and submitting (run 15a3aaf9)
 # The clerk's hint when it goes in circles (run d3ca14df: 95 turns of "fill the position, add it, empty again" until
 # its step cap, never signed). The brief's rule 9: every bid form lets a position be left out explicitly, and a
 # signed bid with one position left out keeps the others' points; an unsigned one scores nothing.
@@ -231,7 +232,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             priced_here = any(re.search(rf"(?<![\w.]){re.escape(str(line.position))}(?![\w.])", page)
                               for line in bid.lines)
             if (priced_here and omits["count"] >= len(bid.omitted) + 1 and not stuck_again
-                    and deadline - time.time() >= WRAP_UP):
+                    and deadline - time.time() >= WRAP_UP and not turns_short()):
                 return (f'blocked: "{label}" would leave out a position that has its values on the bid sheet. Only '
                         "the one position you were stuck on may be left out. Enter this position with its values "
                         "from the bid sheet (all choices with their apply buttons and the amounts in one \"steps\" "
@@ -326,7 +327,16 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         if left < WRAP_UP:
             text += (f"\nTIME IS SHORT ({left} s). Enter no further positions: leave out the ones not entered yet if "
                      "the form allows it, go straight to the signature, fetch the code and submit what is entered.")
+        elif turns_short():
+            # Run 15a3aaf9: a four-step cycle on one position (choose, fill, add, "not possible", continue, "complete
+            # the configuration") ran the clerk into its step cap before the time ran short: unsigned, 0 points.
+            text += (f"\nYOUR TURNS ARE RUNNING OUT ({CLERK_STEPS - clerk.steps} left). Enter no further positions: "
+                     "leave out the position you are on and the ones not entered yet if the form allows it, go "
+                     "straight to the signature, fetch the code and submit what is entered.")
         return text
+
+    def turns_short() -> bool:
+        return CLERK_STEPS - clerk.steps <= TURNS_RESERVE
 
     bidder = {"company": context.get("company"), "vat_id": context.get("vat_id"), "email": context.get("email")}
     sheet = bid_sheet(bid)
