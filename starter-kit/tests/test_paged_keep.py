@@ -107,7 +107,7 @@ async def run_investigator(replies, tab=None, questions=None, filed=None):
         return None
 
     team = SimpleNamespace(hook=lambda name: idle)
-    with patch.object(llm, "chat_json", model), patch.dict(os.environ, {"AGENT_MAX_STEPS": "20"}):
+    with patch.object(llm, "chat_json", model), patch.dict(os.environ, {"AGENT_MAX_STEPS": "20", "CONTEXT_GATES": "0"}):
         outcome = await investigator(case, team, tab, time.time() + 600).run()
     return filed, asked, outcome
 

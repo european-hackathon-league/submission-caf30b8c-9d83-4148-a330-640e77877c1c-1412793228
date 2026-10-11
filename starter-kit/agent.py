@@ -27,7 +27,7 @@ from browser_env import Tab
 from calculator import calculate_bid
 import sanity
 import validate
-from casefile import SHAPES, CaseFile, brief_intro, brief_rules, read_context, status_sections
+from casefile import SHAPES, CaseFile, brief_intro, brief_rules, brief_site_lines, read_context, status_sections
 from gates import Gates
 from worker import ACTIONS_HELP, ACTIONS_HELP_RESEARCH, CONTROL, Agent, brief_for, find_control
 
@@ -123,23 +123,69 @@ INVESTIGATOR_DROP = ("submission", "abgabe", "einreichung")  # sections of the b
 # Which case-file sections a website's role concerns (the role comes from the context, SITE_ROLES), shown from gate 1
 # on next to the sections of the agent's own questions.
 ROLE_SECTIONS = {"erp": {"requirements", "materials"}, "mail": {"authorities"}}
+# Every investigator's standing job, by the role the context gave its website (None: a website without a routed role,
+# e.g. the tender portal or the buyer's portal). The lean prompt has no brief rules, and open questions alone do not
+# cover every world: eval variant B (no catalogue group, so no material question) had the ERP agent finish at turn 2
+# with nothing filed; variant A had the mail agent finish without opening the buyer's quantity-change mail.
+STANDING_JOBS = {
+    "erp": "Your website is the company's ERP or inventory system. Your standing job, whether or not a question asks "
+           "for it yet: every material or article that could match the requirements (by the catalogue group when the "
+           "specification names one, else by its attributes: bore, stroke, pressure, mounting, certification), each "
+           "with its status, freely available stock (storage locations), lead times, carton size, masses, price index "
+           "code and price conditions; and any approvals, releases or registers kept on this website (file a register "
+           "of approvals or releases as mail).",
+    "mail": "Your website is the webmail with the sales mailbox. Your standing job, whether or not a question asks for "
+            "it yet: the discount approvals for this tender, every message from the buyer that changes the tender "
+            "(quantities, positions, dates), and every authorized message the brief names (subjects and senders "
+            "below). Open each and file it with keep.",
+    None: "Your standing job, whether or not a question asks for it yet: everything the bid needs that this website "
+          "holds. On a tender portal: the bill of quantities, every bidder Q&A answer and every change or amendment "
+          "notice. On the buyer's portal: the specification's revision history, the requirements of the current "
+          "revision, and its change notices. The brief's own words below say which website holds what.",
+}
+STANDING_REFUSALS = 2  # dones refused per agent over its standing job (the first one always, gates on)
+# The question kinds a role's rules are about, for the gate-1 brief rules of an agent with no open question.
+ROLE_TOPICS = {"erp": ["material", "data"],
+               "mail": ["discount", "mailbox", "condition_group", "packaging_tariff", "delivery_commitment",
+                        "setup_pool", "project_bonus", "index", "fx", "reserve"],
+               None: ["positions", "clarifications", "revision", "requirements"]}
+# Filed records that wake an idle agent of a role (they can give its website new work), at most WAKE_LIMIT times.
+WAKE_FOR_ROLE = {"erp": ("requirements",), "mail": ("positions", "clarifications"), None: ("positions",)}
+WAKE_LIMIT = 3
+
+
+def landmark(case, name: str) -> int:
+    """How many records of the kinds that can give `name`'s website new work are on file."""
+    return sum(len(getattr(case, attr, None) or {}) for attr in WAKE_FOR_ROLE[site_role(name)])
+
+
+def answerable_here(name: str, questions: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The open questions `name`'s website could answer: its routed ones, or, for a website without a routed role,
+    all but those routed to the ERP or the mailbox."""
+    if site_role(name):
+        return questions_for_site(name, questions)
+    routed = {qid for role in ("erp", "mail") if SITE_ROLES.get(role)
+              for qid, _ in questions_for_site(SITE_ROLES[role], questions) if qid not in RELEASED}
+    return [(qid, text) for qid, text in questions if qid not in routed]
 # A news item that says an extraction brought nothing usable: trouble (gates.py).
 BAD_NEWS = re.compile(r"(?i)extraction failed|no usable records|nothing usable|schema validation rejected")
 
-# A soft budget for the run's input tokens (llm.STATS["prompt_tokens"]). From BUDGET_NEAR of it on, investigators are
-# told to file what they have and finish; from all of it on, an investigator whose documents are not being read
-# finishes before its next model call. The bid clerk and the courier are exempt: a signed bid must still happen.
-# TOKEN_BUDGET=0 turns it off.
+# A soft budget for the run's input tokens (llm.STATS["prompt_tokens"]), OFF by default (TOKEN_BUDGET unset or 0):
+# public run 0cd32dc4 hit 1.1 M at t+170 s, every investigator stopped with questions open, and the bid lost three
+# positions and its discount; clean runs use 1.4-2.6 M. When set, it can never cost quality: from BUDGET_NEAR of it on,
+# investigators are asked to take the shortest way; from all of it on, only an investigator whose website owns no open
+# question and whose documents are not being read finishes before its next model call. The bid clerk and the courier
+# are exempt.
 BUDGET_NEAR = 0.9
-BUDGET_LINE = "TOKEN BUDGET NEARLY USED: file what you have, answer your questions, finish with done (no new searches)."
+BUDGET_LINE = "TOKEN BUDGET NEARLY USED: prefer the shortest way: no browsing beyond your open questions."
 BUDGET_LOGGED: set[str] = set()  # "near" once logged
 
 
 def token_budget() -> int:
     try:
-        return int(os.environ.get("TOKEN_BUDGET", "1100000"))
+        return int(os.environ.get("TOKEN_BUDGET", "0") or 0)
     except ValueError:
-        return 1_100_000
+        return 0
 
 
 def budget_used() -> float:
@@ -157,6 +203,7 @@ class Team:
         self.idle: set[str] = set()
         self.finished = asyncio.Event()
         self.woken: dict[str, float] = {}  # when an agent was last woken for finished reading (at most every 30 s)
+        self.wakes: dict[str, int] = {}  # times an agent was woken because records that concern its website were filed
 
     def release(self, name: str, candidates: set[str]) -> None:
         """A routed agent (ERP or mail) went idle leaving `candidates` open and nothing is being read any more: those
@@ -182,6 +229,7 @@ class Team:
             # questions are still open. Sandbox run 024bd2ac: the ERP agent went idle "until the requirements are
             # read" with its material questions already open; they were never new, so it slept for 400 s.
             reading = self.case.pending
+            mark = landmark(self.case, name)
             self.idle.add(name)
             try:
                 while not self.finished.is_set() and time.time() < self.deadline:
@@ -196,6 +244,16 @@ class Team:
                             return "The case file has news" + (f"; new open questions: {', '.join(sorted(fresh))}" if fresh else "") + "."
                         still_open = {qid for qid, _ in questions_for_site(name, self.case.questions())}
                         rested = time.time() - self.woken.get(name, 0.0) >= 30
+                        # New positions, requirements or Q&A answers can give a website work no question names yet
+                        # (eval variant B: the ERP agent finished before the requirements were filed, and was never
+                        # woken because no material question arose).
+                        now = landmark(self.case, name)
+                        if now > mark and rested and self.wakes.get(name, 0) < WAKE_LIMIT:
+                            self.wakes[name] = self.wakes.get(name, 0) + 1
+                            self.woken[name] = time.time()
+                            return ("The other agents filed new records (" + ", ".join(WAKE_FOR_ROLE[site_role(name)])
+                                    + "). Check your standing job against them: find on your website what they need "
+                                    "and file it; then finish with done.")
                         if reading and self.case.pending < reading and still_open and rested:
                             self.woken[name] = time.time()
                             return ("Documents that were still being read are now in the case file. Open questions: "
@@ -462,8 +520,11 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     # brief's own task paragraph. Without a card (the context has no tender reference) the whole brief, as before.
     card = ""
     if isinstance(case, CaseFile):
-        card = case.task_card(brief_intro(brief_for(case.brief)), {role: site for role, site in SITE_ROLES.items() if site},
-                              mail=site_role(name) == "mail")
+        intro = brief_intro(brief_for(case.brief))
+        card = case.task_card(intro, {role: site for role, site in SITE_ROLES.items() if site},
+                              mail=site_role(name) == "mail", standing=STANDING_JOBS[site_role(name)],
+                              site_note=brief_site_lines(brief_for(case.brief, drop_sections=INVESTIGATOR_DROP
+                                                                   + ("access", "zugang")), name, skip=intro))
     rules_brief = brief_for(case.brief, drop_sections=INVESTIGATOR_DROP + ("access", "zugang"))
     system = full_system if gates.full() else INVESTIGATOR_LEAN.format(
         site=name, url=tab.base_url, actions=ACTIONS_HELP_RESEARCH,
@@ -501,7 +562,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         if gate == 1:  # trouble: what helps to judge a record, and the brief's rules on these questions
             if TRAP_GUIDANCE:
                 text += "\n\nWHEN YOU CHECK A RECORD\n" + TRAP_GUIDANCE[2:]
-            rules = brief_rules(rules_brief, ids) if ids else ""
+            rules = brief_rules(rules_brief, ids or ROLE_TOPICS[site_role(name)])
             if rules:
                 text += "\n\nTHE BRIEF'S RULES ON YOUR QUESTIONS\n" + rules
         if budget_used() >= BUDGET_NEAR:
@@ -509,7 +570,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
             if "near" not in BUDGET_LOGGED:
                 BUDGET_LOGGED.add("near")
                 print(f"[{name}] token budget: {llm.STATS.get('prompt_tokens', 0)} of {token_budget()} input tokens "
-                      "used; investigators are told to finish", flush=True)
+                      "used; investigators are told to take the shortest way", flush=True)
         return text
 
     agent: Agent
@@ -557,7 +618,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         mine = [(qid, text) for qid, text in questions_for_site(name, case.questions())
                 if filed_kinds & set(QUESTION_KINDS.get(qid.split(":", 1)[0], ())) and refused.get(qid, 0) < DONE_REFUSALS]
         if not mine:
-            return None
+            return standing_refusal()
         for qid, _ in mine:
             refused[qid] = refused.get(qid, 0) + 1
         return ("not finished: you filed evidence for these questions and they are still open:\n"
@@ -566,6 +627,26 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
                   "to them and file them: a paged document with collect on its next-page control, or page through it "
                   "and keep (every page of it you read since your last keep is filed with it). If it is on another "
                   "website, or does not exist, answer it absent where the question allows that, or say so with done again.")
+
+    standing_refused = [0]
+
+    def standing_refusal() -> str | None:
+        """Gates on: the agent's first done is refused once with its standing job (the lean prompt has no brief
+        rules, and open questions alone do not cover every world), and a second one while nothing is filed from its
+        website or a question its website could answer is open. Such a refusal raises the gate (more context)."""
+        if gates.full() or standing_refused[0] >= STANDING_REFUSALS or budget_used() >= BUDGET_NEAR:
+            return None
+        open_here = answerable_here(name, case.questions())
+        if standing_refused[0] and filed_kinds and not open_here:
+            return None
+        standing_refused[0] += 1
+        gates.trouble("a done was refused")
+        why = ("nothing from this website is in the case file yet" if not filed_kinds else
+               "questions your website could answer are open: " + ", ".join(qid for qid, _ in open_here[:8])
+               if open_here else "check your standing job before you finish")
+        return (f"not finished: {why}. {STANDING_JOBS[site_role(name)]} Go through it item by item on this website "
+                "(search, open, file with keep or file_each). If this website truly holds none of it, finish with "
+                "done again.")
 
     async def answer(action: dict) -> str:
         # A completion action can arrive in the same turn as `keep`. Wait for this agent's own
@@ -603,7 +684,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     agent.full_system = full_system
     agent.full_briefing = lambda: briefing(full=True)
     agent.stop_when = lambda: ("token budget used up" if token_budget() > 0 and budget_used() >= 1
-                               and not case.pending_for(name) else None)
+                               and not case.pending_for(name) and not answerable_here(name, case.questions()) else None)
     return agent
 
 

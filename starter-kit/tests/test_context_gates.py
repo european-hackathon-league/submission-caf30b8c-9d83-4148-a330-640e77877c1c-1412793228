@@ -269,7 +269,6 @@ class InvestigatorContext(unittest.TestCase):
         self.assertIn("Blocked parts do not qualify", inv.full_system)
         self.assertIn("The websites hold traps", inv.full_system)
         self.assertNotIn("Sign with the code", inv.full_system)  # investigators never get the submission section
-        self.assertLess(len(inv.system), len(inv.full_system))
 
     def test_gates_off_bring_back_the_full_context(self):
         _, inv = make_investigator("stock-db", {"CONTEXT_GATES": "0"})

@@ -194,6 +194,21 @@ def brief_intro(brief: str, limit: int = INTRO_LIMIT) -> str:
     return text if text and text != lines[0].strip() else ""
 
 
+def brief_site_lines(brief: str, site: str, skip: str = "", limit: int = 600) -> str:
+    """The brief's sentences that name the website `site` by its id (what it holds), up to `limit` characters;
+    sentences already in `skip` (the task paragraph on the card) are left out."""
+    if not site:
+        return ""
+    name = re.compile(r"(?<![\w./-])`?" + re.escape(site) + r"`?(?![\w/-])", re.IGNORECASE)
+    flat = " ".join(line.strip() for line in brief.splitlines() if line.strip() and not line.lstrip().startswith("#"))
+    picked, size, known = [], 0, " ".join(skip.split())
+    for sentence in re.split(r"(?<=[.!?])\s+", flat):
+        if name.search(sentence) and " ".join(sentence.split()) not in known and "://" not in sentence and size + len(sentence) <= limit:
+            picked.append(sentence)
+            size += len(sentence) + 1
+    return " ".join(picked)
+
+
 # Words by which a rule of the brief concerns an open question, by the question's id prefix. Mail-record questions
 # also take MAIL_WORDS. Generic business words (English with German stems), no scenario values.
 QUESTION_WORDS = {
@@ -874,13 +889,17 @@ class CaseFile:
         answers = active_clarifications(facts.clarifications, self.scenario)
         needs, waiting = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
         if facts.governing:
-            lacking = [ref for ref in refs if ref not in needs or needs[ref].missing() or not needs[ref].catalogue_group]
+            # Complete once bore, stroke and mounting are on file: pressure, catalogue group and certification are
+            # optional (calculator `unmatchable`). Eval variant B: the specification states neither pressure nor
+            # group, and the customer-portal agent hunted 28 steps for fields that do not exist.
+            lacking = [ref for ref in refs if ref not in needs or needs[ref].unmatchable()]
             sets = {p.requirement_ref for p in facts.positions if p.is_set}
             lacking += [ref for ref in sets if ref in needs and not needs[ref].pieces_per_set and ref not in lacking]
             if lacking:
                 ask("requirements", f"In specification revision {facts.governing} (the current one), the requirements "
                                     f"{', '.join(lacking)} in full: bore, stroke (nominal or usable travel, with its reserve key), "
-                                    "pressure, mounting, certification, catalogue group, pieces per set.")
+                                    "mounting, pieces per set; pressure, certification and catalogue group where the "
+                                    "specification states them.")
         for ref, key in waiting.items():
             ask(f"reserve:{ref}", f"The technical release for specification revision {facts.governing} that gives the "
                                   f"per-end reserve ({key}): requirement {ref} states a usable travel. "
@@ -890,20 +909,28 @@ class CaseFile:
         matched: dict[str, Material] = {}
         for ref in refs:
             need = needs.get(ref)
-            if need is None or ref in waiting or need.missing():
+            # A requirement without a stated pressure or catalogue group can still be matched (calculator
+            # `unmatchable`); eval variant B: no catalogue group, so no material question arose and the ERP agent
+            # finished at once with nothing filed.
+            if need is None or ref in waiting or need.unmatchable():
                 continue
             material = match_material(need, facts.materials)
             if material is None:
+                group = need.catalogue_group
                 seen = [f"{m.number} ({'active' if m.active else 'not active' if m.active is False else 'status unknown'}, "
                         f"{m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification})"
-                        for m in facts.materials if need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
-                ask(f"material:{ref}", f"The ERP material for requirement {ref}: active, in catalogue group "
-                                       f"{need.catalogue_group}, bore {need.bore_mm} mm, stroke {need.stroke_mm} mm, "
-                                       f"{need.pressure_bar} bar, mounting {need.mounting}, certification "
+                        for m in facts.materials if (same_text(m.catalogue_group, group) if group
+                                                     else m.bore_mm == need.bore_mm)]
+                where = (f"in catalogue group {group}" if group else
+                         "(the specification names no catalogue group: search the ERP by its attributes or description)")
+                ask(f"material:{ref}", f"The ERP material for requirement {ref}: active, {where}, bore {need.bore_mm} mm, "
+                                       f"stroke {need.stroke_mm} mm, "
+                                       + (f"{need.pressure_bar} bar, " if need.pressure_bar is not None else "")
+                                       + f"mounting {need.mounting}, certification "
                                        f"{need.certification or 'none'}. File each candidate's technical data and status, "
                                        "also a candidate that seems not to match: the case file does the matching. "
-                                       f"On file for this group: {'; '.join(seen) or 'nothing yet'}. Answer absent only "
-                                       "when every material of the group is on file and none matches.")
+                                       f"On file {'for this group' if group else 'with this bore'}: {'; '.join(seen) or 'nothing yet'}. "
+                                       "Answer absent only when every candidate is on file and none matches.")
                 continue
             matched[ref] = material
             gaps = [label for label, value in (("stock quantity", material.stock), ("lead time from stock", material.stock_lead_weeks),
@@ -963,7 +990,8 @@ class CaseFile:
             answers = active_clarifications(facts.clarifications, self.scenario)
             needs, _ = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
             need = needs.get(question.split(":", 1)[1])
-            group = [m for m in facts.materials if need and need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
+            group = [m for m in facts.materials if need and (same_text(m.catalogue_group, need.catalogue_group)
+                                                             if need.catalogue_group else m.bore_mm == need.bore_mm)]
             unknown = [m.number for m in group if m.active is None or None in (m.bore_mm, m.stroke_mm, m.pressure_bar, m.mounting)]
             if not group:
                 return "no material of that catalogue group is on file yet: search the group and file its materials first"
@@ -1023,11 +1051,13 @@ class CaseFile:
                              ("bonus plans", a.bonus), ("FX", a.fx), ("indices", a.index_rates), ("reserves", a.reserves))))
         return "\n".join(lines)
 
-    def task_card(self, intro: str = "", sites: dict[str, str] | None = None, mail: bool = False) -> str:
+    def task_card(self, intro: str = "", sites: dict[str, str] | None = None, mail: bool = False,
+                  standing: str = "", site_note: str = "") -> str:
         """What an investigator needs of the brief to navigate, built from the context the model read from it at
         the start (CONTEXT_SHAPE) instead of the whole brief: the bid rules are applied by code to what is filed.
         `intro` is the brief's own task paragraph (`brief_intro`), `sites` the role -> website id the context named,
-        `mail`: also the authorized subjects and senders (for the agent that searches the mailbox). Empty when the
+        `mail`: also the authorized subjects and senders (for the agent that searches the mailbox), `standing` the
+        agent's standing job by its website's role, `site_note` what the brief says about its website. Empty when the
         context has no tender reference: then the caller falls back to the whole brief."""
         if not self.reference:
             return ""
@@ -1041,6 +1071,11 @@ class CaseFile:
         roles = [f"{named.get(role, role)}: {site}" for role, site in (sites or {}).items() if site]
         if roles:
             lines.append("- Websites: " + "; ".join(roles) + ".")
+        if standing:
+            lines.append(f"- {standing} When your OPEN QUESTIONS are (none), work through this standing job before "
+                         "you finish.")
+        if site_note:
+            lines.append(f"- The brief on your website: {site_note}")
         if mail:
             pairs = []
             for topic in TOPICS:
