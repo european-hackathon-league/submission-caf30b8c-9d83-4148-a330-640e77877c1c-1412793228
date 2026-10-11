@@ -162,6 +162,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 04:33 | run_33e5cab1 | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | running | | | | d9bb4e5 check 2 |
+| 04:32 | run_19e4b85e | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | running | | | | d9bb4e5 check 1: does ERP use file_each with paths? |
 | 04:29 | run_b7dcf384 → retry run_a5fca6aa | Vamshidhar | package 4c39b4d5 "fast-parallel 03f9ce1: 5 ERP + 5 mail tabs, mail records ahead, ends when nothing open (on maria/cost)" | b7dcf384: **– (platform failure)**; retry running | | | | Atira restarted it automatically |
 | 04:23 | run_dbdb6d49 | Maria | `maria/cost` **020c64d** (+ `file_each`: the model names several records of a list, code opens and files each and its tabs) | **– (platform failure, doesn't count)** | | 8.2 min | 214 / $0.23 | Atira restarted (503s from ~04:30) |
 | 04:20 | **run_91982a40** | Maria | `maria/cost` **020c64d** (+ `file_each`: the model names several records of a list, code opens and files each and its tabs) | **100** | ✅ | 8.2 min | 273 / $0.26 | file_each used 4×, but ERP still 64 turns (its facts sit behind click paths → 492399c). Clerk did not use `steps` this time: 40 turns (one choice per turn), form fine in 132 s but 416k tokens. Input per agent: ERP 781k, mail 467k, clerk 416k, customer portal 336k, tender portal 284k |
