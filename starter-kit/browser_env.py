@@ -817,7 +817,7 @@ class Tab:
                 return f"entered the credentials and submitted the login form; now at {self.page.url}"
         return outcome
 
-    async def collect(self, aid, max_pages: int = 10) -> str:
+    async def collect(self, aid, max_pages: int = 30) -> str:
         """Follow the paging control the model chose until it is gone, and return every page as one document.
         `last_collect` records how it ended: a list that stopped at the page limit with its control still there is
         not complete, and the answer says so instead of passing for the whole list."""
@@ -830,7 +830,10 @@ class Tab:
             return f"[{aid}] has no label to follow from page to page"
         first, start = self.document, self.page.url
         pages, seen = [first], {_progress(first)}
-        limit = max(1, min(int(max_pages or 10), 30))
+        try:
+            limit = max(1, min(int(max_pages or 30), 30))
+        except (TypeError, ValueError):
+            limit = 30
         home = next((frame for low, high, frame in self.frames if low <= int(aid) < high), None)
         chosen = info["name"]
         switched = ""  # the label of a sibling control that took over from one that made no progress
@@ -895,8 +898,8 @@ class Tab:
         how = (f'"{chosen}" loaded nothing new, so its document\'s own "{switched}" was followed instead' if switched
                else "")
         more = (f' THE LIST IS NOT COMPLETE: this stopped at the limit of {limit} page(s) and "{info["name"]}" is '
-                "still there. Collect again from this page (a higher max_pages reads further) before you treat the "
-                "list as complete." if capped else "")
+                "still there. Collect again from this page to read the next batch before you treat the list as "
+                "complete." if capped else "")
         if len(pages) == 1:
             if capped:
                 return f"max_pages {limit} reads only the page you see." + more

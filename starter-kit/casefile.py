@@ -910,7 +910,7 @@ class CaseFile:
         return SimpleNamespace(governing=governing, positions=positions, clarifications=clarifications,
                                requirements=requirements, materials=materials, authorities=self.authorities(),
                                no_material={qid.split(":", 1)[1] for qid, (status, _) in self.answers.items()
-                                            if qid.startswith("material:") and status == "absent"})
+                                            if qid.startswith(("material:", "candidates:")) and status == "absent"})
 
     # ---- what is still unknown -------------------------------------------------------------------------------
 
@@ -1066,6 +1066,20 @@ class CaseFile:
             # finished at once with nothing filed.
             if need is None or ref in waiting or need.unmatchable():
                 continue
+            audit_id = f"candidates:{ref}"
+            audit = self.answers.get(audit_id)
+            if audit is None:
+                seen = [f"{m.number} ({'active' if m.active else 'not active' if m.active is False else 'status unknown'}, "
+                        f"{m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification})"
+                        for m in facts.materials if need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
+                ask(audit_id, f"ERP catalogue-candidate audit for requirement {ref}, catalogue group "
+                              f"{need.catalogue_group}: search the group, collect every results page (repeat collect "
+                              "if capped), then open and file each returned material's technical data and sales status "
+                              "before selecting or pricing any one record. Candidates on file for this group: "
+                              f"{'; '.join(seen) or 'none yet'}. Answer complete only after the result list has ended "
+                              "and every candidate is fully filed; answer absent only when the exhaustive search returned no candidates.")
+            elif audit[0] == "absent":
+                continue
             material = match_material(need, facts.materials)
             if material is None:
                 group = need.catalogue_group
@@ -1158,6 +1172,24 @@ class CaseFile:
             return "facts from documents you filed are still being extracted; wait for them, then answer"
         if question == "clarifications" and status == "complete" and not self.clarifications:
             return "no Q&A answers have been extracted yet; reopen the Q&A evidence, file it as clarifications, and wait for the extraction result"
+        if question.startswith("candidates:"):
+            facts = self.inputs()
+            answers = active_clarifications(facts.clarifications, self.scenario)
+            needs, _ = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
+            need = needs.get(question.split(":", 1)[1])
+            group = [m for m in facts.materials if need and need.catalogue_group
+                     and same_text(m.catalogue_group, need.catalogue_group)]
+            unknown = [m.number for m in group
+                       if m.active is None or None in (m.bore_mm, m.stroke_mm, m.pressure_bar, m.mounting)]
+            if status == "complete":
+                if not group:
+                    return "no catalogue candidates are on file yet: continue the ERP search, or answer absent only after an exhaustive search returned none"
+                if unknown:
+                    return ("the technical data or sales status of " + ", ".join(unknown)
+                            + " is not on file yet: open and file every candidate before completing the audit")
+            if status == "absent" and group:
+                return ("catalogue candidates are already on file: open and file every candidate's technical data, "
+                        "then complete the audit (or use the material question if none qualifies)")
         if question.startswith("material:") and status == "absent":
             facts = self.inputs()
             answers = active_clarifications(facts.clarifications, self.scenario)

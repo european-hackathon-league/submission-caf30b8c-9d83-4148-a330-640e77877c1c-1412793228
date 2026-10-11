@@ -652,6 +652,18 @@ class Acting(Case):
         self.assertEqual(tab.last_collect["pages"], 1)
         self.assertIn("Item S-1 |", tab.document)
 
+    async def test_collect_uses_the_full_safe_page_budget_by_default(self):
+        tab = await self.open("/orders")
+        page = await tab.observe()
+        await tab.collect(self.control(page, "link", "Next page").id)
+        self.assertEqual((tab.last_collect["pages"], tab.last_collect["capped"]), (3, False))
+
+    async def test_collect_uses_the_safe_default_when_the_requested_limit_is_invalid(self):
+        tab = await self.open("/orders")
+        page = await tab.observe()
+        await tab.collect(self.control(page, "link", "Next page").id, max_pages="all")
+        self.assertEqual((tab.last_collect["pages"], tab.last_collect["capped"]), (3, False))
+
     async def test_fill_reads_the_field_back_and_says_when_it_did_not_keep_what_was_typed(self):
         tab = await self.open("/readback.html")
         page = await tab.observe()

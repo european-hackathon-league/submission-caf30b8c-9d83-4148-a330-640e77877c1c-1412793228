@@ -33,7 +33,7 @@ Browser actions:
   {"do": "set", "id": 12, "value": true}           tick/untick a checkbox, choose a radio button, or move a slider to a number
   {"do": "goto", "url": "<an address or path on this website that you have seen>"}
   {"do": "back"}    {"do": "reload"}
-  {"do": "collect", "id": 12, "max_pages": 10}     [12] is the next-page or load-more control of a list or paged document you want in full: it is followed until the end and all pages come back as one document
+  {"do": "collect", "id": 12, "max_pages": 30}     [12] is the next-page or load-more control of a list or paged document you want in full: it is followed until the end and all pages come back as one document. Use 30 unless the list is known to be shorter; if it says incomplete, collect again from the current page.
   {"do": "fetch", "id": 12}                        download the file behind link [12] (archive, CSV, PDF, text) and read it as a document
   {"do": "wait"}                                   pause two seconds, for a page that is still loading
   {"do": "steps", "steps": [{"field": "<label>", "value": "..."}, {"press": "<button label>"}, ...]}
@@ -441,7 +441,7 @@ class Agent:
         if do == "reload":
             return await tab.reload()
         if do == "collect":
-            return await tab.collect(action.get("id"), action.get("max_pages") or 10)
+            return await tab.collect(action.get("id"), action.get("max_pages") or 30)
         if do == "fetch":
             return await tab.fetch(action.get("id"))
         return f'unknown action "{do}"'

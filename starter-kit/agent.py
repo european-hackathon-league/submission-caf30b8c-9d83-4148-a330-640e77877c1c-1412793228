@@ -80,8 +80,9 @@ How to work
   enter the CASE FILE when you call keep on that page; reading a value in your thought without calling keep leaves
   the case file unchanged.
 - File pages that state the facts themselves (an opened document, record or message), not menus or hit lists.
-  For a paged list or document that matters, use collect so that no page is missed, then keep it. For stock
-  availability, drill down from plant/physical summaries into storage locations to view freely available
+  For a paged list or document that matters, use collect with max_pages 30 so that no page is missed, then keep
+  it. If collect reports that the list is incomplete, collect again from its last page until it reaches the end.
+  For stock availability, drill down from plant/physical summaries into storage locations to view freely available
   (unrestricted) stock excluding blocked/inspection stock, and file that page with keep.
 - The websites hold traps: superseded revisions, look-alike records for other tender references, drafts and
   previews, blocked materials, future-dated records, values in the wrong unit or number format. Check dates,
@@ -96,6 +97,12 @@ How to work
 - When a question asks for every item in a list, inspect its page controls and use collect on the control that
   advances that list before filing it. Check the resulting page count or end state; do not mark a list complete after
   seeing only its first page. If the list is inside an embedded document, use the controls belonging to that document.
+- For every ERP catalogue-candidate audit, search the requested catalogue group, collect every results page before
+  choosing a record, then open and file the master data for every returned candidate. Do this even after one record
+  looks like a match: a blocked, incomplete, or less suitable first result is not evidence that the remaining file
+  numbers do not matter. Mark the audit complete only after the whole result list has ended and every candidate has
+  its technical data and sales status on file. The calculator, not a guessed first result, decides which filed record
+  qualifies.
 - For mailbox questions, search relevant folders separately when mailbox search covers only the current folder;
   include the archive when looking for historical or latest records. If a query is too broad or returns nothing,
   refine the terms and try again. Open candidate messages and file the message itself, not only its hit row.
