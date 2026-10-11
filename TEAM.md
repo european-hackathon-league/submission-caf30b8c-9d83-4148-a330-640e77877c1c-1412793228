@@ -300,6 +300,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 08:12 | run_fde2953b | Maria | `maria/cost` **ccf5612** (rerun, named "maria/cost ccf5612") | running | | | | Comparison run 2 (team lead) |
+| 08:12 | run_cf65dedf | Maria | `8c44dad` (rerun, named "maria/cost 8c44dad") | running | | | | Comparison run 2 (team lead) |
 | 08:02 | **run_fbaac569** | Maria | `maria/cost` **ccf5612** (rerun; named "maria/cost ccf5612") | **100** | ✅ | 7.6 min | 192 / /usr/bin/bash.18 | Clean: all agents done on their own, clerk 17 turns, replay 4×. Input 1.57 M (ERP 611k, mail 256k, customer 215k, tender 210k) |
 | 08:08 | run_680b48a9 | Maria | `8c44dad` (rerun of the 05:47 code: form replay `fill_positions`, before the clerk/mail/paging changes; named "maria/cost 8c44dad") | running | | | | Comparison run (team lead) |
 | 08:01 | **run_73af7b9c** | Maria | `maria/cost` **991689d** (+ context gates; token budget 1.1 M) | **42.1** | ✅ | 4.4 min | 179 / /usr/bin/bash.16 | **Token budget again**: ERP and mail "finished: token budget used up" (ERP 40 steps, mail 30) with HZ-2170/HZ-3916 price data and all five Terminfreigaben (TZ-*) open → 01.02-01.04 "no price condition valid on the scenario date", lead times unresolved. Investigation input 1.10 M, total 1.22 M. Gate changes: ERP 18, customer 7, mail 7, tender 7. Clerk 16 turns, replay 1× |
