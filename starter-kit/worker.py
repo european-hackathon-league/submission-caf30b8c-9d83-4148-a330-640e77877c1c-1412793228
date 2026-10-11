@@ -149,6 +149,11 @@ class Agent:
         self.steps = 0
         self.started = time.time()
 
+    @property
+    def circle_hints(self) -> int:
+        """How often this agent was told it is going in circles."""
+        return self._circle_hints
+
     def document(self) -> tuple[str, str]:
         """What the agent is looking at: the document it collected or fetched, else the page as last read."""
         return self.held or (self.tab.document, self.tab.document_source)
@@ -214,9 +219,11 @@ class Agent:
             if action["do"] == "click":  # a press can bring an error message: stop there instead of filling on blindly
                 after = await asyncio.wait_for(self.tab.observe(), STEP_TIMEOUT)
                 new = [a for a in ALERT.findall(after) if a not in alerts_before]
-                if new:
+                if new:  # an error or a confirmation: the model reads which (run 012496d3: a "saved" notice taken
+                    # for an error made the clerk enter the same position again, which the form refused)
                     return (f"ran {len(done)} of {len(steps)} steps: " + "; ".join(done) +
-                            f". After step {number} the page says: {' / '.join(new)[:300]}. Fix that before going on.")
+                            f". After step {number} the page says: {' / '.join(new)[:300]}. If that reports an error, "
+                            "fix it; if it confirms what you did, go on from the page as it is now.")
             if any(word in str(result) for word in ("has no option", "did not change", "is disabled", "BUT the field")):
                 return f"ran {len(done)} of {len(steps)} steps: " + "; ".join(done) + f". Step {number} did not take; check it."
         return f"ran all {len(done)} steps: " + "; ".join(done)
