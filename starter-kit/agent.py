@@ -54,9 +54,12 @@ Case-file actions:
         mail              an opened mail message
   {{"do": "file_each", "links": [12, 15, 18], "kind": "<kind>", "tabs": [{{"tab": "<tab label>", "kind": "<kind>"}}]}}
       Open each record you name from the list in front of you (up to 12 links by id) and file it with keep as
-      "kind"; "tabs" (optional) also opens and files those tabs of every record, each with its own kind. You come
-      back to the list with a report of what was filed. Use it when a result list holds several records you need:
-      it saves a turn per record.
+      "kind"; "tabs" (optional) also opens and files those tabs of every record, each with its own kind. A tab can
+      also be a path of controls clicked in order, the page at its end being filed:
+      {{"path": ["<label 1>", "<label 2>", "<label 3>"], "kind": "<kind>"}} (labels or a part of them, as the
+      record page shows them). You come back to the list with a report of what was filed. Use it when a result list
+      holds several records you need: walk the first record yourself to learn which tabs and paths hold its facts,
+      then file the others with one file_each giving the same tabs and paths.
   {{"do": "answer", "question": "<id>", "status": "complete" | "absent", "note": "..."}}
       Close an open question: "complete" when all its evidence is filed (needed for lists that only you know to be
       complete), "absent" when you searched properly and what is asked for does not exist.
@@ -167,7 +170,7 @@ async def file_each(tab, action: dict, file, saw, deadline: float, seen: str = "
     model gave, then goes back to the list. The model chooses the records and kinds, as with keep; this only saves
     one model turn per page opened (the ERP agent needed 58-85 turns per run, each resending its whole prompt)."""
     kind = str(action.get("kind") or "")
-    tabs = [t for t in (action.get("tabs") or []) if isinstance(t, dict) and t.get("tab")]
+    tabs = [t for t in (action.get("tabs") or []) if isinstance(t, dict) and (t.get("tab") or t.get("path"))]
     links = [str(i).strip("[] ") for i in (action.get("links") or [])][:FILE_EACH_LIMIT]
     if not links or not kind:
         return 'file_each needs "links" (ids of the records on this page) and "kind"'
@@ -206,23 +209,31 @@ async def file_each(tab, action: dict, file, saw, deadline: float, seen: str = "
         filed = [f"{kind}: {file(kind, tab.document, tab.document_source)[:120]}"]
         record_url = tab.page.url
         for extra in tabs:
-            # Looked up on the page as it is now (ids change with every page); if the previous tab replaced the
-            # record and this tab is not on it, back to the record first.
-            now = await tab.observe()
-            control, why = find_control(now, str(extra["tab"]), ("link", "button", "clickable"))
-            if control is None and tab.page.url != record_url:
-                await tab.goto(record_url)
+            # A tab, or a path of controls clicked one after another (a stock overview, then a plant, then a
+            # storage location); the page at its end is filed. Every control is looked up by its label on the page
+            # as it is then (ids change with every page). If the first one is not on the page, back to the record.
+            path = [str(step) for step in (extra.get("path") or [extra.get("tab")]) if step][:6]
+            name = " > ".join(path)
+            missing = None
+            for number, step in enumerate(path):
                 now = await tab.observe()
-                control, why = find_control(now, str(extra["tab"]), ("link", "button", "clickable"))
-            if control is None:
-                filed.append(f'tab "{extra["tab"]}": {why}')
+                control, why = find_control(now, step, ("link", "button", "clickable"))
+                if control is None and number == 0 and tab.page.url != record_url:
+                    await tab.goto(record_url)
+                    now = await tab.observe()
+                    control, why = find_control(now, step, ("link", "button", "clickable"))
+                if control is None:
+                    missing = f'"{name}": {why}'
+                    break
+                href_tab = next((m.group(4) for m in CONTROL.finditer(now) if m.group(1) == control), "")
+                target = re.search(r"->\s*(\S+)", href_tab or "")
+                await (tab.goto(target.group(1)) if target else tab.click(control))
+            if missing:
+                filed.append(missing)
                 continue
-            href_tab = next((m.group(4) for m in CONTROL.finditer(now) if m.group(1) == control), "")
-            target = re.search(r"->\s*(\S+)", href_tab or "")
-            await (tab.goto(target.group(1)) if target else tab.click(control))
             saw(await tab.observe())
             tab_kind = str(extra.get("kind") or kind)
-            filed.append(f'tab "{extra["tab"]}" as {tab_kind}: {file(tab_kind, tab.document, tab.document_source)[:120]}')
+            filed.append(f'"{name}" as {tab_kind}: {file(tab_kind, tab.document, tab.document_source)[:120]}')
         report.append(f'[{aid}] "{label}" ({opened[:60]}): ' + "; ".join(filed))
     await tab.goto(home)
     return f"file_each opened {len(links)} record(s) and is back on the list:\n" + "\n".join(report)

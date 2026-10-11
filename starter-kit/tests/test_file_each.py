@@ -71,6 +71,36 @@ class FileEach(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(seen), 6)  # every opened page counts as seen for the coverage gate
         self.assertIn('"M-100"', result)
 
+    async def test_a_path_of_controls_is_followed_and_its_last_page_filed(self):
+        # a record whose stock sits behind two clicks: the stock overview, then a storage location
+        class DeepSite(FakeSite):
+            async def goto(self, url):
+                if "tab=stock" in url:
+                    number = url.split("m=", 1)[1].split("&", 1)[0]
+                    self.view = (f"url: http://erp.test/record?m={number}&tab=stock\ntitle: Stock {number}\n"
+                                 f'[2] link "Location 0001 open" -> /record?m={number}&tab=location')
+                    self.page.url = f"http://erp.test/record?m={number}&tab=stock"
+                    return f"opened {self.page.url}"
+                if "tab=location" in url:
+                    number = url.split("m=", 1)[1].split("&", 1)[0]
+                    self.view = f"url: http://erp.test/record?m={number}&tab=location\nfree stock 31"
+                    self.page.url = f"http://erp.test/record?m={number}&tab=location"
+                    return f"opened {self.page.url}"
+                result = await super().goto(url)
+                if "/record" in url and "tab=" not in url:
+                    self.view += f'\n[9] link "Stock overview" -> /record?m={url.split("m=", 1)[1]}&tab=stock'
+                return result
+
+        site, filed = DeepSite(), []
+        result = await file_each(site, {"do": "file_each", "links": [3, 4], "kind": "material",
+                                        "tabs": [{"path": ["Stock overview", "Location 0001"], "kind": "material"}]},
+                                 lambda kind, text, source: filed.append((kind, source)) or "filed", lambda page: None,
+                                 time.time() + 600)
+        self.assertEqual(filed, [
+            ("material", "http://erp.test/record?m=M-100"), ("material", "http://erp.test/record?m=M-100&tab=location"),
+            ("material", "http://erp.test/record?m=M-200"), ("material", "http://erp.test/record?m=M-200&tab=location")])
+        self.assertIn('"Stock overview > Location 0001" as material', result)
+
     async def test_the_ids_are_those_of_the_page_the_model_saw(self):
         # a list that loaded more rows after the model's read numbers them differently on a fresh read
         site, filed, seen = FakeSite(), [], []
