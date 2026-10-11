@@ -20,14 +20,18 @@ the private dataset"**, so this is the closest we get to testing for it. CLI upg
 
 | Eval | What | Runs |
 |---|---|---|
-| `quotecraft-variant-a` (ev_4e00776148892811, private; files in `evals/variant-a` on branch `maria/evals`) | The organisers' starter world: four simple sites, invented data, positions 10/20/30, a superseded spec revision, a quantity change by mail, a blocked material | Final package (sub_973a02b5) ×2 and `maria/cost` d9bb4e5 ×2 running |
-| next: `variant-b` | Harder, in the private dataset's direction: other site names and software, facts split differently across the sites | ⬜ |
+| `quotecraft-variant-a` (ev_4e00776148892811, private; `evals/variant-a` on branch `maria/evals`) | The organisers' starter world: four simple sites, invented data, positions 10/20/30, fewer rules (no pressure, no catalogue group), a superseded spec revision, a quantity change **by mail**, a blocked material | **Final package: 0, 0. d9bb4e5: 0, 0.** All facts found, but the calculator matched **no material**: the spec states no pressure and `matches()` required equal pressure. Also the mail's quantity change was ignored (only Q&A counted) and a plain "Bestand 40 Stk" was not taken as free stock. **Fixed in f4e04d2** (escalation) / 8d1f0b5 (cost); fixed code running on it (2 runs) |
+| `quotecraft-variant-b` (private; `evals/variant-b`) | Harder, in the private dataset's direction: other site names (`beschaffung`, `lieferantenportal`, `warenwirtschaft`, `postfach`), discount approval in the ERP (not mail), quantity change as an amendment notice on the buyer portal ("1.040 Stück"), ERP record over three tabs, a draft spec revision, reference with a slash (AZ-2027/0815), positions 1.1/1.2/2.1 | Final package: **0** (1st run); d9bb4e5 running |
+| next: `variant-c` | Our hand-priced invented tender (`test_invented_tender.py`) as a world: the full rule set on new pages | ⬜ |
 
 Commands: `atira eval run <slug> --package submission|test|<dir> --repeats 1-3`, `atira eval runs <slug>`.
 Limits: 10 evals per team, 12 eval runs an hour; up to 12 test + eval runs at a time. Model calls are now ~2.2×
 faster and up to 64 Qwen calls can run at once.
 
 ### Open problems
+
+> 🚨 **P0 (11 Oct 04:50): on our own evals the final package scores 0** (variant A: 2 of 2; variant B: first run). Cause in A: public-1 assumptions in the matching and extraction (see Evals). The organisers say most teams regressed on the private dataset; this is likely ours. Fix f4e04d2 in test. **The final package should be replaced once the fixed code passes the evals and a sandbox run.**
+
 
 | # | Problem | Status |
 |---|---|---|
@@ -177,8 +181,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 04:33 | run_33e5cab1 | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | running | | | | d9bb4e5 check 2 |
-| 04:32 | run_19e4b85e | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | running | | | | d9bb4e5 check 1: does ERP use file_each with paths? |
+| 04:33 | **run_33e5cab1** | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | **100** | ✅ | ~10 min | 244 / $0.26 | |
+| 04:32 | **run_19e4b85e** | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | **100** | ✅ | ~11 min | 224 / $0.23 | After the Atira restart (503s 04:30) |
 | 04:29 | run_b7dcf384 → retry run_a5fca6aa | Vamshidhar | package 4c39b4d5 "fast-parallel 03f9ce1: 5 ERP + 5 mail tabs, mail records ahead, ends when nothing open (on maria/cost)" | b7dcf384: **– (platform failure)**; retry running | | | | Atira restarted it automatically |
 | 04:23 | run_dbdb6d49 | Maria | `maria/cost` **020c64d** (+ `file_each`: the model names several records of a list, code opens and files each and its tabs) | **– (platform failure, doesn't count)** | | 8.2 min | 214 / $0.23 | Atira restarted (503s from ~04:30) |
 | 04:20 | **run_91982a40** | Maria | `maria/cost` **020c64d** (+ `file_each`: the model names several records of a list, code opens and files each and its tabs) | **100** | ✅ | 8.2 min | 273 / $0.26 | file_each used 4×, but ERP still 64 turns (its facts sit behind click paths → 492399c). Clerk did not use `steps` this time: 40 turns (one choice per turn), form fine in 132 s but 416k tokens. Input per agent: ERP 781k, mail 467k, clerk 416k, customer portal 336k, tender portal 284k |
