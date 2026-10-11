@@ -110,6 +110,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 00:45 | run_d8fdffff | Maria | `maria/escalation` **ed69d43** | **– (platform failure, doesn't count)** | | | 0 calls | Atira: "The platform failed, not your agent system" |
+| 00:34 | **run_11adf2a5** | Maria | `maria/escalation` **ed69d43** (clerk fix) | **100** 🎉 | ✅ | **9.3 min** | 208 / $0.30 | Clean, investigation 278 s. **Clerk 24 turns** (before 37-46), 8 `steps` actions; no loop, no escalation needed. Form + TAN still ~281 s: fewer model turns, but each chain waits for every page reload |
 | 00:18 | **run_e1e2eb81** | Maria | `maria/escalation` **dd8127d** | **100** 🎉 | ✅ | **9.4 min** | 225 / $0.30 | Series 4/4. Clean, investigation 397 s |
 | 00:03 | **run_d247703d** | Maria | `maria/escalation` **dd8127d** | **100** | ✅ | 14.6 min | 215 / $0.34 | Series 3/4. 4 model timeouts slowed the investigation (651 s) |
 | 23:44 | run_d3ca14df | Maria | `maria/escalation` **dd8127d** | **0 (never signed)** | ❌ | 18.8 min | 304 / $0.52 | Series 2/4. Investigation fine (284 s, full bid). **Clerk looped 95 turns** on "fill the position, add it, fields empty again" until its 120-step cap: the form rejected the position, but the `steps` chain reported success, and escalation had been switched off for the clerk in cc7f3f8. **Our fault; fixed in ed69d43** |
