@@ -143,7 +143,8 @@ class Agent:
             "directly with goto, or try a different way. If you already have the answer, finish with done now.")
         self._circle_hint: str | None = None  # a sanity check that may veto a browser action before it runs (sanity.py)
         self.turns: list[dict] = []
-        self.after_steps: Callable[[list, str, str], Awaitable[str]] | None = None  # see _browser
+        # called after every browser action with the page it was taken on (the clerk's automatic form replay)
+        self.on_action: Callable[[dict, str, str], Awaitable[str | None]] | None = None
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
         self.coverage = Ledger()  # what this agent really opened, typed and followed (coverage.py)
         self.steps = 0
@@ -260,11 +261,7 @@ class Agent:
         if do == "click":
             return await tab.click(action.get("id"))
         if do == "steps":
-            steps, before = action.get("steps") or [], self.tab.document  # the page as read at the start of the turn
-            result = await self._steps(steps)
-            if self.after_steps is not None:  # the clerk's automatic form replay (submit.py)
-                result = await self.after_steps(steps, before, result)
-            return result
+            return await self._steps(action.get("steps") or [])
         if do == "fill":
             return await tab.fill(action.get("id"), action.get("text", ""), bool(action.get("enter")))
         if do == "select":
@@ -432,7 +429,7 @@ class Agent:
                 if veto:
                     results.append(veto)
                     continue
-                before = self.tab.page.url
+                before, page_before = self.tab.page.url, self.tab.document
                 try:
                     result = await asyncio.wait_for(self._browser(action), STEPS_TIMEOUT if do == "steps" else STEP_TIMEOUT)
                 except asyncio.TimeoutError:
@@ -440,6 +437,11 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
+                if self.on_action is not None:  # the clerk's automatic form replay (submit.py), whatever the style
+                    note = await self.on_action(action, page_before, str(result))
+                    if note:
+                        results.append(note)
+                        moved = True
                 if do == "fill" and NOT_KEPT not in str(result):  # a text the field refused was never searched
                     self.coverage.typed(before, action.get("text", ""))
                 elif do == "collect":

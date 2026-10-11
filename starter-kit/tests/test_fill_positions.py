@@ -156,6 +156,17 @@ class AutomaticReplay(unittest.IsolatedAsyncioTestCase):
         self.assertIn("entered automatically", script.seen[1])
         self.assertEqual(len(script.seen), 2)  # one model turn for all three positions, then done
 
+    async def test_single_actions_by_id_are_learned_as_well(self):
+        # run 472732d2: the clerk entered the first position with single selects, fills and clicks, never steps
+        form = PositionForm()
+        by_hand = {"thought": "position 1 field by field", "actions": [
+            {"do": "select", "id": 0, "value": "M-1"}, {"do": "fill", "id": 1, "text": "4"},
+            {"do": "fill", "id": 2, "text": "10,50"}, {"do": "fill", "id": 3, "text": "2"}, {"do": "click", "id": 4}]}
+        script = await run(form, [by_hand])
+        self.assertEqual(form.saved["2"], {"material": "M-2", "qty": "30", "price": "1234,56", "weeks": "6"})
+        self.assertEqual(form.saved["3"], {"material": "M-3", "qty": "7", "price": "99,00", "weeks": "1"})
+        self.assertEqual(len(script.seen), 2)
+
     async def test_nothing_is_replayed_while_the_form_stays_on_the_position(self):
         form = PositionForm(refuse="1")
         script = await run(form, [FIRST_BY_HAND])

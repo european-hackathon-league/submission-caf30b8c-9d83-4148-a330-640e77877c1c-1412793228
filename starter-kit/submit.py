@@ -18,7 +18,7 @@ import sanity
 from browser_env import Tab
 from calculator import Bid
 from preflight import Report, check as check_review
-from worker import ACTIONS_HELP, Agent
+from worker import ACTIONS_HELP, CONTROL, Agent
 
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
 MAIL_BUDGET = 120  # seconds one request to the mailbox may take
@@ -197,6 +197,25 @@ def fill_template(template: list, line: dict) -> list:
         if not skip:
             steps.append({**step, "value": value})
     return steps
+
+
+def as_steps(action: dict, page: str) -> list:
+    """A browser action as label-addressed steps (for the automatic form replay): a choice or a field by the label
+    its id has on the page it was taken on, a click by its control's label, a steps action as it is."""
+    do = action.get("do")
+    if do == "steps":
+        return [step for step in action.get("steps") or [] if isinstance(step, dict)]
+    aid = str(action.get("id", "")).strip("[] ")
+    label = next((m.group(3) for m in CONTROL.finditer(page) if m.group(1) == aid), None)
+    if not label:
+        return []
+    if do == "click":
+        return [{"press": label}]
+    if do == "fill":
+        return [{"field": label, "value": str(action.get("text", ""))}]
+    if do in ("select", "set"):
+        return [{"field": label, "value": action.get("value")}]
+    return []
 
 
 def _number_forms(value) -> set[str]:
@@ -528,31 +547,34 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                   circle_hint=CLERK_CIRCLE_HINT)
     chains: dict[str, list] = {}  # steps the clerk ran while the form showed each position (automatic replay)
 
-    async def after_steps(steps: list, before: str, result: str) -> str:
-        """Automatic form replay: when the clerk's steps entered a position and the form moved on to another bid
-        position, that position's steps become the template (templatize; the model resolves only ambiguous fields)
-        and code enters every further position (fill_positions), without waiting for the model to ask for it."""
+    async def on_action(action: dict, before: str, result: str) -> str | None:
+        """Automatic form replay, whatever the clerk's style (run 472732d2: single selects and clicks, no steps):
+        every action taken while the form shows a bid position is recorded as a label-addressed step; when the form
+        moves on to another bid position, that position's steps become the template (templatize; the model resolves
+        only ambiguous fields) and code enters every further position (fill_positions)."""
         every = [str(line["position"]) for line in sheet["positions"]]
         position = shown_position(before, [p for p in every if p not in replayed], every)
         if position is None or time.time() > deadline - WRAP_UP:
-            return result
-        chains.setdefault(position, []).extend(step for step in steps if isinstance(step, dict))
+            return None
+        chains.setdefault(position, []).extend(as_steps(action, before))
+        if action.get("do") not in ("click", "steps"):
+            return None
         following = [p for p in every if p not in replayed and p != position]
         if shown_position(await tender_tab.observe(), following, every) is None:
-            return result  # still on this position (or past the positions): nothing to replay yet
+            return None  # still on this position (or past the positions): nothing to replay yet
         replayed.add(position)
         template, ambiguous = templatize(chains[position], next(l for l in sheet["positions"] if str(l["position"]) == position))
         template = await resolve_template(template, ambiguous)
         if template is None:
-            return result + ("\nThe next positions are not entered automatically (a field could not be matched to "
-                             "the bid sheet): enter the next one, then use fill_positions.")
+            return ("The next positions are not entered automatically (a field could not be matched to the bid "
+                    "sheet): enter the next one, then use fill_positions.")
         line = json.dumps(template, ensure_ascii=False)[:400]
         print(f"[submit] automatic form replay after position {position}: {line}", flush=True)
         report = await fill_positions({"template": template})
-        return (result + f"\nPosition {position} is in. The following positions were entered automatically with "
-                         "the same steps and their own values:\n" + report)
+        return (f"Position {position} is in. The following positions were entered automatically with the same steps "
+                "and their own values:\n" + report)
 
-    clerk.after_steps = after_steps
+    clerk.on_action = on_action
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
