@@ -300,6 +300,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 08:42 | run_59006930 | Maria | `maria/cost` **1e23884** (8999ddd + Sprint H orchestrator, ORCHESTRATOR=1) | running | | | | Public check 1 |
 | 08:40 | **SUBMISSION sub_b2b4d48c** (scored run run_5cdc14ba) | Maria | `maria/cost` **ccf5612** (insurance submission; package 28933808) | review passed, in evaluation | | | | Public tests of ccf5612: 100 ×4 (run_74e84e70, run_6d30dbd4, run_fbaac569, run_7a2a43e6) |
 | 08:32 | run_4068e3c3 | Maria | `maria/cost` **8999ddd** (gate fix) | running | | | | Public check 2 |
 | 08:31 | **run_b462cdb3** | Maria | `maria/cost` **8999ddd** (gate fix + Sprint F mail coverage + Sprint G clerk fixes) | **77** | ✅ | 10 min | 246 / $0.21 | **Metal index missing on all 5 positions**: mail filed only the decoy "Preisindizes VG-2027-7093-A" (index-2610, 5,15 EUR/kg), never the exact-reference one, then at mail 21 closed the question itself: `answer index:MET-4607 complete` ("Two Preisindizes messages filed … the latest … carries the MET-4607 rate") → code accepted it though the case file had "indices: -" → "unresolved metal index MET-4607" ×5. Everything else complete. Input 1.70 M (ERP 87 calls/600k), 27 gate lines, clerk 33 turns, replay 4× |
