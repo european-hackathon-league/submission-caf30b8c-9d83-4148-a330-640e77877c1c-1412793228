@@ -234,6 +234,43 @@ class ResolvingAmbiguity(unittest.IsolatedAsyncioTestCase):
                                                             [(0, "X", ["{a}", "{b}"])]))
 
 
+class NoCertificateIsLearnedAsAPlaceholder(unittest.TestCase):
+    """Runs faa828e4, 6d30dbd4, 74e84e70: learned on a position without certificate, the form's word for "none" was
+    kept literally and replayed onto a position that needs a certificate."""
+    WITHOUT = {"position": "1", "quantity": 4, "unit_price": "10.50", "lead_time_weeks": 3,
+               "material": {"bore_mm": 40, "mounting": "foot", "certification": "none"}}
+    WITH = {"position": "2", "quantity": 9, "unit_price": "20.00", "lead_time_weeks": 5,
+            "material": {"bore_mm": 63, "mounting": "foot", "certification": "XY-7"}}
+    ALSO_WITHOUT = {"position": "3", "quantity": 2, "unit_price": "7.25", "lead_time_weeks": 1,
+                    "material": {"bore_mm": 32, "mounting": "foot", "certification": None}}
+    STEPS = [{"field": "Bore", "value": "40"}, {"field": "Certificate class", "value": "Nil"},
+             {"field": "Extra note", "value": "Express"}, {"field": "Qty", "value": "4"},
+             {"field": "Price", "value": "10,50"}, {"press": "Next position"}]
+
+    def test_the_certificate_field_becomes_a_placeholder_and_replays_onto_both_kinds(self):
+        template, ambiguous = submit.templatize(self.STEPS, self.WITHOUT)
+        self.assertEqual(ambiguous, [])
+        self.assertEqual(template[1], {"field": "Certificate class", "value": "{certification|none=Nil}"})
+        self.assertEqual(template[2], {"field": "Extra note", "value": "Express"})  # not a certificate: kept
+        with_cert = submit.fill_template(template, self.WITH)
+        self.assertIn({"field": "Certificate class", "value": "XY-7"}, with_cert)
+        self.assertIn({"field": "Price", "value": "20,00"}, with_cert)
+        without = submit.fill_template(template, self.ALSO_WITHOUT)
+        self.assertIn({"field": "Certificate class", "value": "Nil"}, without)
+        self.assertIn({"field": "Bore", "value": "32"}, without)
+
+    def test_a_none_word_is_found_without_a_certificate_label(self):
+        steps = [{"field": "Variant", "value": "Keine"}, {"field": "Extra", "value": "Express"}, {"field": "Qty", "value": "4"}]
+        template, _ = submit.templatize(steps, self.WITHOUT)
+        self.assertEqual(template[0]["value"], "{certification|none=Keine}")
+        self.assertEqual(template[1]["value"], "Express")
+
+    def test_a_none_word_on_the_sheet_counts_as_no_certificate_when_replaying(self):
+        template = [{"field": "Certificate", "value": "{certification|none=Without}"}]
+        line = {**self.ALSO_WITHOUT, "material": {"certification": "n/a"}}
+        self.assertEqual(submit.fill_template(template, line), [{"field": "Certificate", "value": "Without"}])
+
+
 class TheTemplate(unittest.TestCase):
     LINE = {"position": "2", "material_number": "M-2", "quantity": 30, "unit_price": "1234.56", "lead_time_weeks": 6,
             "rebate_total": None, "material": {"bore_mm": 50, "certification": None}}

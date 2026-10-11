@@ -578,7 +578,7 @@ class Agent:
             repeats = repeats + 1 if signature == last_signature else max(0, seen_signatures[signature] - 1)
             last_signature = signature
 
-            results, finished, moved = [], None, False
+            results, finished, moved, refused = [], None, False, False
             if self._circle_hint:  # shown with the results of this turn's actions, at the top of the next turn
                 results.append(self._circle_hint)
                 self._circle_hint = None
@@ -586,6 +586,13 @@ class Agent:
                 if not isinstance(action, dict):
                     continue
                 do = action.get("do")
+                if refused:
+                    # The rest of the turn was planned on the refused action having run (eval run_8be6fb149758cee5:
+                    # the guard refused the fill of the signing code, and finalize in the same turn still pressed
+                    # the binding submit button with an empty code). Nothing after a refusal runs in this turn.
+                    results.append(f'skipped {json.dumps(action, ensure_ascii=False)[:120]}: an earlier action of '
+                                   "this turn was refused")
+                    continue
                 if do == "done":
                     refusal = await self.before_done(action) if self.before_done else None
                     if refusal:
@@ -615,6 +622,7 @@ class Agent:
                 veto = self.guard(action) if self.guard else None
                 if veto:
                     results.append(veto)
+                    refused = True
                     continue
                 before, page_before = self.tab.page.url, self.tab.document
                 limit = STEPS_TIMEOUT if do == "steps" else PATH_TIMEOUT if do == "path" else STEP_TIMEOUT
@@ -625,6 +633,8 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
+                if do in ("steps", "path") and " was refused: " in str(result):
+                    refused = True  # a step inside it was refused by the same guard: the turn stops here as well
                 # (a path reports each of its clicks to on_action itself, each on the page it was taken on)
                 if self.on_action is not None and do != "path":  # the clerk's automatic form replay (submit.py), whatever the style
                     note = await self.on_action(action, page_before, str(result))

@@ -75,6 +75,32 @@ class ActionVerification(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state_fingerprint(first), state_fingerprint(reread))
 
 
+class ARefusedActionEndsTheTurn(unittest.IsolatedAsyncioTestCase):
+    async def test_nothing_after_a_refused_action_runs_in_that_turn(self):
+        # eval run_8be6fb149758cee5: the guard refused the code fill, finalize in the same turn still pressed submit
+        replies = [{"thought": "", "actions": [{"do": "fill", "id": 1, "text": "bad"}, {"do": "finalize", "id": 2},
+                                               {"do": "fill", "id": 1, "text": "ok"}]},
+                   {"thought": "", "actions": [{"do": "done", "summary": "stopped"}]}]
+        asked, finalized = [], []
+
+        async def model(messages, **kwargs):
+            asked.append(messages[-1]["content"])
+            return replies.pop(0)
+
+        async def finalize(action):
+            finalized.append(action)
+            return "pressed"
+
+        guard = lambda action: "blocked: not on the bid sheet" if action.get("text") == "bad" else None  # noqa: E731
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("test", FakeTab(True), "system", lambda: "job", max_steps=4, guard=guard,
+                                  extra={"finalize": finalize}).run()
+        self.assertTrue(outcome["done"])
+        self.assertEqual(finalized, [])
+        self.assertIn("an earlier action of this turn was refused", asked[1])
+        self.assertNotIn('value="ok"', asked[1])
+
+
 class LoopDetectionAndChaining(unittest.IsolatedAsyncioTestCase):
     """Tests for repeated-action loop warnings, stale-ID chaining protection, and stuck-tab renewal."""
 
