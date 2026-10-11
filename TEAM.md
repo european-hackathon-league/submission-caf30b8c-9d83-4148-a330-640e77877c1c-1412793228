@@ -12,6 +12,21 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 11 Oct 2026,
 | **Branches** | `maria/escalation` (all robustness fixes + clerk fixes, last dba5e72) → `maria/cost` (+ cost cuts, last 8e19c98). Neither merged to main; main (d72deb8) has none of these fixes |
 | **Winners** | Picked on the private dataset first, then public, then elegance. Robustness first, then cost × time |
 
+### Evals (new, 11 Oct 04:40 UTC)
+
+The organisers added **evals**: our own invented worlds (up to 4 sites, a brief, the one correct answer), hosted by
+Atira, on which we can run new code **or our past submissions**. Their note: **"most teams regressed on quality on
+the private dataset"**, so this is the closest we get to testing for it. CLI upgraded (`atira upgrade`).
+
+| Eval | What | Runs |
+|---|---|---|
+| `quotecraft-variant-a` (ev_4e00776148892811, private; files in `evals/variant-a` on branch `maria/evals`) | The organisers' starter world: four simple sites, invented data, positions 10/20/30, a superseded spec revision, a quantity change by mail, a blocked material | Final package (sub_973a02b5) ×2 and `maria/cost` d9bb4e5 ×2 running |
+| next: `variant-b` | Harder, in the private dataset's direction: other site names and software, facts split differently across the sites | ⬜ |
+
+Commands: `atira eval run <slug> --package submission|test|<dir> --repeats 1-3`, `atira eval runs <slug>`.
+Limits: 10 evals per team, 12 eval runs an hour; up to 12 test + eval runs at a time. Model calls are now ~2.2×
+faster and up to 64 Qwen calls can run at once.
+
 ### Open problems
 
 | # | Problem | Status |
