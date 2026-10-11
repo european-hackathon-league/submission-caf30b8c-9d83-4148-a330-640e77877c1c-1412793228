@@ -12,7 +12,7 @@ import io
 import re
 import zipfile
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 from sanity import same_value
 
@@ -238,7 +238,31 @@ LOGIN_JS = r"""
 """
 
 MAX_OBSERVATION = 14000
-NAV_COMMIT, NAV_LOAD = 8, 12  # seconds for the server to answer a navigation, then for the page to build (goto)
+# A cookie wall's privacy-preserving choice: a visible control for "necessary only", else "decline", on a page that
+# mentions cookies; settings/customise links are not choices. Marks the control and returns its label, or null.
+CONSENT_JS = r"""
+() => {
+  const text = ((document.body && document.body.innerText) || '').toLowerCase();
+  if (!text.includes('cookie')) return null;
+  const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.disabled; };
+  const label = el => (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+  const controls = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button]')]
+    .filter(visible).filter(el => !/einstellung|setting|anpass|custom|details|mehr|more/i.test(label(el)));
+  for (const wanted of [/notwendig|necessary|essential|erforderlich|nur technisch|only required/i,
+                        /ablehnen|reject|decline|deny|nicht zustimmen/i]) {
+    const el = controls.find(e => wanted.test(label(e)));
+    if (el) { el.setAttribute('data-consent-choice', '1'); return label(el).slice(0, 80); }
+  }
+  return null;
+}
+"""
+# Playwright's own defaults wait 30 s for an element and 30 s for a navigation. On the challenge's flaky portals a
+# control that is not there within a few seconds is not coming (scored run a176359f: one click fallback waited the
+# full 30 s on a detached frame), and a fresh tab is quicker than waiting (Tab.renew).
+ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS = 8000, 15000
+SETTLE_SECONDS = 8  # the longest a page may keep loading data before it is read as it is
+LOGIN_WAIT_SECONDS = 8  # after a login is submitted: how long the login form may stay before it counts as not passed
 UNREADABLE = "(this document could not be read"
 PAGE_BREAK = "===== collected page"  # between the pages of a list or document that `collect` followed to its end
 
@@ -385,59 +409,6 @@ def document_text(data: bytes, content_type: str, name: str, depth: int = 0) -> 
     return clean_text(text)
 
 
-TARGET_JS = """el => { const raw = el.getAttribute('href') || el.getAttribute('data-url') || el.getAttribute('data-href')
-                                || el.getAttribute('formaction') || '';
-                    try { return raw && !raw.startsWith('#') && !raw.startsWith('javascript:') ? new URL(raw, document.baseURI).href : ''; }
-                    catch (e) { return ''; } }"""
-# Every control of a document that could page it: its label, tag, the address it leads to (or loads), and whether it
-# is disabled; for the search of a sibling paging control (Tab.collect).
-PAGERS_JS = r"""() => [...document.querySelectorAll('a[href], button, [role=button], [role=link]')].slice(0, 300).map(el => {
-  const raw = el.getAttribute('href') || el.getAttribute('data-url') || el.getAttribute('data-href') || el.getAttribute('formaction') || '';
-  let target = '';
-  try { target = raw && !raw.startsWith('#') && !raw.startsWith('javascript:') ? new URL(raw, document.baseURI).href : ''; } catch (e) {}
-  return {name: (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0, 400),
-          tag: el.tagName, target,
-          disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true' || !!el.closest('fieldset[disabled],[inert]')};
-})"""
-STATUS_LINE = re.compile(r"\((?:alert|status)\)")
-
-
-def _progress(document: str) -> str:
-    """What a page read says, for telling whether a paging control brought anything new: without element ids, the
-    address line and the messages a page announces (a "loading failed" notice is not a new page)."""
-    return "\n".join(line for line in without_ids(document).splitlines()
-                     if not line.startswith("url: ") and not STATUS_LINE.search(line))
-
-
-def _next_address(candidate: str, target: str) -> bool:
-    """Whether a control leading to `candidate` pages to where a control leading to `target` was meant to: the same
-    address, or the same address with one number in its query at least as high (the page after the one shown)."""
-    if not candidate or not target:
-        return False
-    one, two = urlparse(candidate), urlparse(target)
-    if (one.netloc, one.path) != (two.netloc, two.path):
-        return False
-    if one.query == two.query:
-        return True
-    first, second = parse_qs(one.query, keep_blank_values=True), parse_qs(two.query, keep_blank_values=True)
-    if set(first) != set(second):
-        return False
-    differ = [key for key in first if first[key] != second[key]]
-    if len(differ) != 1:
-        return False
-    try:
-        return int(first[differ[0]][-1]) >= int(second[differ[0]][-1])
-    except ValueError:
-        return False
-
-
-async def _target_of(control) -> str:
-    try:
-        return await control.evaluate(TARGET_JS)
-    except Exception:  # noqa: BLE001
-        return ""
-
-
 class Tab:
     """One browser tab on one website, driven by one agent."""
 
@@ -458,6 +429,12 @@ class Tab:
         self._watch(page)
 
     def _watch(self, page) -> None:
+        for setter, value in (("set_default_timeout", ACTION_TIMEOUT_MS),
+                              ("set_default_navigation_timeout", NAVIGATION_TIMEOUT_MS)):
+            try:
+                getattr(page, setter)(value)
+            except Exception:  # noqa: BLE001  a stand-in page in the tests has no such setting
+                pass
         page.on("dialog", lambda dialog: asyncio.ensure_future(self._on_dialog(dialog)))
         page.on("response", self._on_response)
         page.on("request", lambda request: self.loading.add(request) if request.resource_type in ("document", "xhr", "fetch") else None)
@@ -472,9 +449,6 @@ class Tab:
         runs 41a5de64, c3c4b1e8 and 64397a5e one browser could not load the tender portal for the whole run, fresh
         tabs in it included, while the other browsers kept working."""
         old = self.page
-        # The fresh tab goes back to the page the agent was on, as a person would reopen it (it used to start at the
-        # home page, and the agent spent turns finding its way back); the home page only when that page fails.
-        where = old.url if self._on_site(old.url) else self.base_url + "/"
         self.renewals += 1
         moved = self.renewals >= 2 and bool(self.spares)
         context = self.spares[(self.renewals - 2) % len(self.spares)] if moved else old.context
@@ -485,19 +459,14 @@ class Tab:
             await old.close()
         except Exception:  # noqa: BLE001
             pass
-        if moved:  # another browser has no session yet: home page, log in, then back to the page
-            result = await self.goto(self.base_url + "/")
-            try:
-                result += "; " + await self.login()
-            except Exception as error:  # noqa: BLE001
-                result += f"; logging in again failed: {str(error)[:120]}"
-            if where.rstrip("/") != self.base_url.rstrip("/"):
-                result += "; " + await self.goto(where)
-            return "moved to another browser (this one could not load the website): " + result
-        result = await self.goto(where)
-        if result.startswith("could not") and where.rstrip("/") != self.base_url.rstrip("/"):
-            result += "; " + await self.goto(self.base_url + "/")
-        return result
+        result = await self.goto(self.base_url + "/")
+        if not moved:
+            return result
+        try:
+            result += "; " + await self.login()
+        except Exception as error:  # noqa: BLE001
+            result += f"; logging in again failed: {str(error)[:120]}"
+        return "moved to another browser (this one could not load the website): " + result
 
     async def screenshot(self) -> str | None:
         """The visible part of the page as a base64 JPEG, for a model that reads images; None when it fails."""
@@ -525,7 +494,7 @@ class Tab:
     async def settle(self):
         """Wait until the page, its frames and the data they fetch have arrived and nothing more is on its way."""
         loop = asyncio.get_running_loop()
-        end, quiet = loop.time() + 12, None
+        end, quiet = loop.time() + SETTLE_SECONDS, None
         await asyncio.sleep(0.1)  # let a click start its request
         while loop.time() < end:
             if self.loading:
@@ -539,7 +508,7 @@ class Tab:
             self.loading.clear()  # a request that never ends must not hold up every later step
         for frame in list(self.page.frames):
             try:
-                await frame.wait_for_load_state("domcontentloaded", timeout=8000 if frame == self.page.main_frame else 3000)
+                await frame.wait_for_load_state("domcontentloaded", timeout=6000 if frame == self.page.main_frame else 3000)
             except Exception:  # noqa: BLE001
                 pass
         for _ in range(3):  # a server error page: retry the same address, as a person would press reload
@@ -625,12 +594,31 @@ class Tab:
             .some(el => visible(el) && (el.tagName !== 'DIALOG' || el.matches(':modal')));
         }"""
         for frame in self.page.frames:
-            try:
-                if await frame.evaluate(script):
+            try:  # bounded: a frame that is being replaced never answers (run 20e3c020: clicks ran past 20 s)
+                if await asyncio.wait_for(frame.evaluate(script), 3):
                     return True
             except Exception:  # noqa: BLE001
                 continue
         return False
+
+    async def choose_necessary_cookies(self) -> str | None:
+        """On a cookie wall, choose the privacy-preserving option (only the necessary cookies, else decline), as
+        every agent's first or second turn did by hand. Nothing happens on a page that does not mention cookies or
+        offers only "accept all": the model deals with it. Returns what was chosen, or None."""
+        for frame in list(self.page.frames):
+            try:
+                label = await asyncio.wait_for(frame.evaluate(CONSENT_JS), 3)
+            except Exception:  # noqa: BLE001
+                continue
+            if not label:
+                continue
+            try:
+                await frame.locator("[data-consent-choice]").first.click(timeout=2500, no_wait_after=True)
+            except Exception:  # noqa: BLE001  a click that started a page load is still a click
+                pass
+            await self.settle()
+            return f'chose "{label}" on the cookie notice; now at {self.page.url}'
+        return None
 
     def _locator(self, aid):
         try:
@@ -662,10 +650,17 @@ class Tab:
             return f"[{aid}] is disabled (inside a locked or inert area?); nothing happened"
         before = self.page.url
         try:
-            await locator.click(timeout=2500)
-        except Exception:  # noqa: BLE001  hidden in a collapsed menu, or covered: activate it directly
+            await locator.click(timeout=2500, no_wait_after=True)
+        except Exception as error:  # noqa: BLE001  hidden in a collapsed menu, or covered: activate it directly
+            # A click that started a slow page load is reported as failed although it happened (local run: every
+            # login and cookie button; scored run a176359f: a 78 s login). Clicking again would press it twice (a
+            # second code request voids the first code), so only a control that is still there, on a page that
+            # has not moved, is activated directly.
+            if not await self._still_here(locator, before, error):
+                await self.settle()
+                return f'clicked [{aid}] "{info["name"]}"' + (f"; now at {self.page.url}" if self.page.url != before else "")
             try:
-                await locator.evaluate("el => el.click()")
+                await locator.evaluate("el => el.click()", timeout=3000)
             except Exception as error:  # noqa: BLE001
                 return f"could not click [{aid}]: {str(error)[:150]}"
         await self.settle()
@@ -673,6 +668,15 @@ class Tab:
             return "the page now has a modal dialog; read it before acting behind it"
         moved = self.page.url != before
         return f'clicked [{aid}] "{info["name"]}"' + (f"; now at {self.page.url}" if moved else "")
+
+    async def _still_here(self, locator, before: str, error: Exception) -> bool:
+        """After a click that raised: is the control still on an unchanged page, so that the click did not happen?"""
+        if self.page.url != before or "navigat" in str(error).lower() or "detached" in str(error).lower():
+            return False
+        try:
+            return await asyncio.wait_for(locator.count(), 2) > 0
+        except Exception:  # noqa: BLE001  the page is being replaced
+            return False
 
     async def fill(self, aid, text: str, enter: bool = False) -> str:
         locator = self._locator(aid)
@@ -684,7 +688,10 @@ class Tab:
             return f"could not fill [{aid}]: {str(error)[:150]}"
         readback = await self._readback(locator, str(text))  # before Enter can load another page
         if enter:
-            await locator.press("Enter")
+            try:
+                await locator.press("Enter", no_wait_after=True)
+            except Exception:  # noqa: BLE001  Enter started a slow page load (a search): it was pressed
+                pass
             await self.settle()
         if await self._modal_is_open():
             return "the page now has a modal dialog; read it before acting behind it"
@@ -768,27 +775,16 @@ class Tab:
         target = urljoin(self.page.url if self._on_site(self.page.url) else self.base_url + "/", str(url).strip())
         if not self._on_site(target):
             return f"{target} is not on this website; you only work on {self.base_url}"
-        # Two phases (circuit breaker): the server must answer within NAV_COMMIT seconds, once more at once if it does
-        # not; then the page gets NAV_LOAD seconds to build, and a page that answered but is slow still counts as
-        # opened (the page read decides). Before: one 20 s wait for the whole page, a slow page counted as failed.
-        for attempt in (1, 2):
-            try:
-                await self.page.goto(target, wait_until="commit", timeout=NAV_COMMIT * 1000)
-                break
-            except Exception as error:  # noqa: BLE001
-                if attempt == 2:
-                    return f"could not open {target}: {str(error)[:150]}"
-                self.events.append(f"{target} did not answer within {NAV_COMMIT} s; opened it once more")
         try:
-            await self.page.wait_for_load_state("domcontentloaded", timeout=NAV_LOAD * 1000)
-        except Exception:  # noqa: BLE001
-            self.events.append(f"the page answered but was still building after {NAV_LOAD} s")
+            await self.page.goto(target, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        except Exception as error:  # noqa: BLE001
+            return f"could not open {target}: {str(error)[:150]}"
         await self.settle()
         return f"opened {self.page.url}"
 
     async def back(self) -> str:
         try:
-            await self.page.go_back(wait_until="domcontentloaded", timeout=15000)
+            await self.page.go_back(wait_until="domcontentloaded", timeout=10000)
         except Exception as error:  # noqa: BLE001
             return f"could not go back: {str(error)[:120]}"
         await self.settle()
@@ -796,7 +792,7 @@ class Tab:
 
     async def reload(self) -> str:
         try:
-            await self.page.reload(wait_until="domcontentloaded", timeout=15000)
+            await self.page.reload(wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
         except Exception as error:  # noqa: BLE001
             return f"could not reload: {str(error)[:120]}"
         await self.settle()
@@ -812,12 +808,39 @@ class Tab:
             except Exception:  # noqa: BLE001
                 continue
             if outcome == "ok":
-                await frame.locator("[data-login-password]").first.press("Enter")
+                try:
+                    await frame.locator("[data-login-password]").first.press("Enter", no_wait_after=True)
+                except Exception:  # noqa: BLE001  the login started a slow page load: it was submitted
+                    pass
                 await self.settle()
-                return f"entered the credentials and submitted the login form; now at {self.page.url}"
+                # Success is read from the page, not waited for: the login form is gone. A form still showing
+                # after the bounded wait is reported at once instead of being waited on for 30-45 s (run a176359f).
+                if await self.password_field_shown():
+                    return ("submitted the login form, but the login form is still shown: read the page for an error "
+                            f"message (now at {self.page.url})")
+                return f"entered the credentials and submitted the login form; logged in, now at {self.page.url}"
         return outcome
 
-    async def collect(self, aid, max_pages: int = 30) -> str:
+    async def password_field_shown(self, wait: float = LOGIN_WAIT_SECONDS) -> bool:
+        """Whether a visible password field is still on the page after up to `wait` seconds: the DOM marker of a
+        login that has not gone through (polled, so a login that went through returns at once)."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + wait
+        while True:
+            shown = False
+            for frame in list(self.page.frames):
+                try:
+                    if await frame.evaluate("() => [...document.querySelectorAll('input[type=password]')]"
+                                            ".some(e => e.offsetParent !== null)"):
+                        shown = True
+                        break
+                except Exception:  # noqa: BLE001  a frame that is being replaced
+                    continue
+            if not shown or loop.time() >= end:
+                return shown
+            await asyncio.sleep(0.25)
+
+    async def collect(self, aid, max_pages: int = 10) -> str:
         """Follow the paging control the model chose until it is gone, and return every page as one document.
         `last_collect` records how it ended: a list that stopped at the page limit with its control still there is
         not complete, and the answer says so instead of passing for the whole list."""
@@ -829,21 +852,11 @@ class Tab:
         if not info["name"]:
             return f"[{aid}] has no label to follow from page to page"
         first, start = self.document, self.page.url
-        pages, seen = [first], {_progress(first)}
-        try:
-            limit = max(1, min(int(max_pages or 30), 30))
-        except (TypeError, ValueError):
-            limit = 30
-        home = next((frame for low, high, frame in self.frames if low <= int(aid) < high), None)
-        chosen = info["name"]
-        switched = ""  # the label of a sibling control that took over from one that made no progress
+        pages, seen = [first], {first}
+        limit = max(1, min(int(max_pages or 10), 30))
 
         async def next_control():
-            # the chosen control's own document (an embedded viewer) first: another frame can hold a control with the
-            # same label that pages something else
-            frames = [frame for _, _, frame in self.frames]
-            frames.sort(key=lambda frame: frame is not home)
-            for frame in frames:
+            for _, _, frame in self.frames:
                 candidates = frame.locator("a[href], button, [role=button], [role=link]")
                 for index in range(min(await candidates.count(), 200)):
                     candidate = candidates.nth(index)
@@ -857,58 +870,33 @@ class Tab:
                         continue
             return None
 
-        capped, seen_dud = False, False
-        turn = 0
-        while turn < limit:
+        capped = False
+        for turn in range(limit):
             control = await next_control()
             if control is None:
                 break
             if turn == limit - 1:  # the page limit ended this, not the list: the control is still there
                 capped = True
                 break
-            target = await _target_of(control)
             try:
-                await control.click(timeout=2500)
+                await control.click(timeout=2500, no_wait_after=True)
             except Exception:  # noqa: BLE001
                 try:
                     await control.evaluate("el => el.click()")
                 except Exception:  # noqa: BLE001
                     break
             await self.read()
-            progress = _progress(self.document)
-            if progress not in seen:
-                seen.add(progress)
-                pages.append(self.document)
-                turn += 1
-                continue
-            # No new content: the control is a dud (a "load more" that fails, or one that keeps loading the same
-            # page). Sandbox run dafda06b: "load more" of an embedded paged document failed after its first press,
-            # collect stopped at page 1 of 5, and the agent paged by hand and filed only the last page. The same
-            # document often has a second control that leads to the page the dud was meant to load (a "next page"
-            # link to the same address, or to the page after the one already shown): that one takes over, once.
-            seen_dud = True
-            if switched or not target:
+            if self.document in seen:
                 break
-            sibling = await self._sibling_control(target, info["name"], home)
-            if sibling is None:
-                break
-            switched = sibling["name"]
-            info = {**info, "name": sibling["name"], "tag": sibling["tag"]}
+            seen.add(self.document)
+            pages.append(self.document)
         self.last_collect = {"where": start, "control": info["name"], "pages": len(pages), "capped": capped}
-        how = (f'"{chosen}" loaded nothing new, so its document\'s own "{switched}" was followed instead' if switched
-               else "")
         more = (f' THE LIST IS NOT COMPLETE: this stopped at the limit of {limit} page(s) and "{info["name"]}" is '
-                "still there. Collect again from this page to read the next batch before you treat the list as "
-                "complete." if capped else "")
+                "still there. Collect again from this page (a higher max_pages reads further) before you treat the "
+                "list as complete." if capped else "")
         if len(pages) == 1:
-            if capped:
-                return f"max_pages {limit} reads only the page you see." + more
-            if seen_dud:
-                return (f'"{info["name"]}" loaded nothing new (the page may show why); if the document says it has '
-                        "more pages, collect with its other paging control (a next-page link) or page through it")
-            return f'"{info["name"]}" led to no further page; the list is the page you see'
-        if switched:
-            how = " " + how + "."
+            return (f"max_pages {limit} reads only the page you see." + more if capped
+                    else f'"{info["name"]}" led to no further page; the list is the page you see')
         # A button may append rows in place rather than lead to a new page. Compare page bodies without generated
         # element ids or the changing paging control: both change between reads even when every earlier row remains.
         def body(page: str) -> str:
@@ -916,7 +904,7 @@ class Tab:
                              if not re.match(r'(?:button|link) "', line.strip()))
 
         bodies = [body(page) for page in pages]
-        grows = (len(pages) > 1 and info["tag"].upper() != "A" and not switched
+        grows = (len(pages) > 1 and info["tag"].upper() != "A"
                  and all(later.startswith(earlier) and len(later) >= len(earlier)
                          for earlier, later in zip(bodies, bodies[1:])))
         if grows:  # a "load more" control: the last page holds every row
@@ -925,24 +913,8 @@ class Tab:
                     + ("the rows loaded so far are on the page." + more if capped
                        else "the list is now complete on the page"))
         self.document = "\n".join(f"{PAGE_BREAK} {number} =====\n{page}" for number, page in enumerate(pages, 1))
-        return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one.{how}{more} COLLECTED '
+        return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one.{more} COLLECTED '
                 f"DOCUMENT (file it with keep if it is relevant):\n{without_ids(self.document)[:MAX_OBSERVATION * 2]}")
-
-    async def _sibling_control(self, target: str, name: str, home) -> dict | None:
-        """Another control of the same document (its frame first) that leads where the control labelled `name` was
-        meant to: see `_next_address`. None when there is none."""
-        frames = [frame for _, _, frame in self.frames]
-        frames.sort(key=lambda frame: frame is not home)
-        for frame in frames:
-            try:
-                found = await frame.evaluate(PAGERS_JS)
-            except Exception:  # noqa: BLE001
-                continue
-            for control in found:
-                label = clean_text(control.get("name") or "")[:80]
-                if label and label != name and not control.get("disabled") and _next_address(control.get("target") or "", target):
-                    return {"name": label, "tag": control.get("tag") or ""}
-        return None
 
     async def fetch(self, aid) -> str:
         """Download what the chosen link points to and read it as a document."""

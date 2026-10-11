@@ -233,60 +233,6 @@ class LogFailureScenarios(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((mat.bore_mm, mat.carton_size, mat.stock, mat.allocation_mass_g),
                          (50, 5, 75, casefile.Decimal("1250.00")))
 
-    def test_candidate_audit_stays_open_when_a_matching_material_is_available(self):
-        """A first matching ERP record does not make the catalogue audit disappear."""
-        facts = self.make_casefile()
-        facts.merge("positions", {"positions": [
-            {"position": "01.01", "quantity": 10, "unit": "pcs", "unit_is_set": False, "requirement_ref": "REQ-A1"},
-        ]})
-        facts.merge("revisions", {"revisions": [{"revision": "REV-200", "status": "current", "date": "2030-05-01"}]})
-        facts.merge("requirements", {"revision": "REV-200", "requirements": [{
-            "requirement_ref": "REQ-A1", "bore_mm": 50, "stroke_mm": 200, "stroke_is_usable_travel": False,
-            "pressure_bar": 160, "mounting": "flange", "certification": None, "catalogue_group": "GRP-10",
-        }]})
-        facts.merge("material", {"materials": [{
-            "material_number": "MAT-101", "is_active": True, "catalogue_group": "GRP-10",
-            "bore_mm": 50, "stroke_mm": 200, "pressure_bar": 160, "mounting": "flange", "certification": None,
-        }]})
-
-        questions = dict(facts.questions())
-        self.assertIn("candidates:REQ-A1", questions)
-        self.assertIn("data:MAT-101", questions)
-        self.assertEqual(facts.answer("candidates:REQ-A1", "complete", "all catalogue pages and records filed"),
-                         "question candidates:REQ-A1 closed as complete")
-        self.assertIn("data:MAT-101", dict(facts.questions()))
-
-    def test_candidate_audit_rejects_a_summary_record_without_master_data(self):
-        facts = self.make_casefile()
-        facts.merge("positions", {"positions": [
-            {"position": "01.01", "quantity": 10, "unit": "pcs", "unit_is_set": False, "requirement_ref": "REQ-A1"},
-        ]})
-        facts.merge("revisions", {"revisions": [{"revision": "REV-200", "status": "current", "date": "2030-05-01"}]})
-        facts.merge("requirements", {"revision": "REV-200", "requirements": [{
-            "requirement_ref": "REQ-A1", "bore_mm": 50, "stroke_mm": 200, "stroke_is_usable_travel": False,
-            "pressure_bar": 160, "mounting": "flange", "certification": None, "catalogue_group": "GRP-10",
-        }]})
-        facts.merge("material", {"materials": [{"material_number": "MAT-101", "catalogue_group": "GRP-10"}]})
-
-        refusal = facts.answer("candidates:REQ-A1", "complete", "done")
-        self.assertIn("technical data or sales status of MAT-101", refusal)
-
-    def test_empty_candidate_audit_marks_the_requirement_as_no_bid(self):
-        facts = self.make_casefile()
-        facts.merge("positions", {"positions": [
-            {"position": "01.01", "quantity": 10, "unit": "pcs", "unit_is_set": False, "requirement_ref": "REQ-A1"},
-        ]})
-        facts.merge("revisions", {"revisions": [{"revision": "REV-200", "status": "current", "date": "2030-05-01"}]})
-        facts.merge("requirements", {"revision": "REV-200", "requirements": [{
-            "requirement_ref": "REQ-A1", "bore_mm": 50, "stroke_mm": 200, "stroke_is_usable_travel": False,
-            "pressure_bar": 160, "mounting": "flange", "certification": None, "catalogue_group": "GRP-10",
-        }]})
-
-        self.assertEqual(facts.answer("candidates:REQ-A1", "absent", "exhaustive catalogue search returned none"),
-                         "question candidates:REQ-A1 closed as absent")
-        self.assertNotIn("material:REQ-A1", dict(facts.questions()))
-        self.assertEqual(facts.inputs().no_material, {"REQ-A1"})
-
     def test_single_message_folder_header_does_not_overwrite_valid_mailbox_address(self):
         """A folder header without '@' (such as 'Postfach / Lesebereich') must not overwrite a valid mailbox."""
         facts = self.make_casefile()
@@ -535,10 +481,7 @@ class AnswerGuardsAndLifecycle(unittest.TestCase):
 
     def test_auto_closing_questions_reject_manual_complete_and_pending_extractions_block_answers(self):
         facts = self.make_casefile()
-        refused = facts.answer("material:REQ-A1", "complete", "found it")
-        self.assertIn("closes by itself", refused)
-        # the refusal names what is still missing, so the agent knows what to file (run dafda06b)
-        self.assertIn("Still missing: The ERP material for requirement REQ-A1", refused)
+        self.assertIn("closes by itself", facts.answer("material:REQ-A1", "complete", "found it"))
         facts.pending = 1
         self.assertIn("still being extracted", facts.answer("discount", "absent", "no discount"))
         facts.pending = 0
@@ -602,75 +545,6 @@ class AnswerGuardsAndLifecycle(unittest.TestCase):
         self.assertNotIn("answer A-101 line 1", deduped[1])
         self.assertIn("answer A-102 line 1", deduped[1])
         self.assertIn("header line 1", deduped[1])
-
-
-class RecordQuestionsNeedAValidRecord(unittest.TestCase):
-    """A record question (index, fx, keys, discount) is not closed as complete while no valid record backs it: only
-    a decoy with a suffixed reference was filed in one run, the index question was closed, and the index was lost."""
-
-    def make_casefile(self) -> casefile.CaseFile:
-        facts = casefile.CaseFile("brief", {"tender_reference": "T-7100", "scenario_date": "2031-03-20T12:00:00Z",
-                                            "authorized_senders": {"price_indices": "pricing",
-                                                                   "discount_approval": "director"}})
-        facts.mailbox = "offers@maker-works.test"
-        facts.merge("positions", {"positions": [
-            {"position": "1", "quantity": 8, "unit": "pcs", "unit_is_set": False, "requirement_ref": "RQ-1"}]})
-        facts.merge("revisions", {"revisions": [{"revision": "R-3", "status": "current", "date": "2031-01-10"}]})
-        facts.merge("requirements", {"revision": "R-3", "requirements": [{
-            "requirement_ref": "RQ-1", "bore_mm": 40, "stroke_mm": 150, "stroke_is_usable_travel": False,
-            "pressure_bar": 100, "mounting": "foot", "certification": None, "catalogue_group": "GX"}]})
-        facts.merge("material", {"materials": [{
-            "material_number": "M-55", "is_active": True, "catalogue_group": "GX", "bore_mm": 40, "stroke_mm": 150,
-            "pressure_bar": 100, "mounting": "foot", "metal_index_code": "IX-TIN"}]})
-        return facts
-
-    def index_message(self, reference: str, sender: str = "pricing@maker-works.test", stamp: str = "2031-03-01T08:00:00Z",
-                      subject: str = "Index bulletin") -> dict:
-        return {"sender": sender, "timestamp": stamp, "subject": subject, "tender_reference": reference,
-                "topic": "price_indices", "price_indices": [
-                    {"code": "IX-TIN", "rate": "7.25", "unit": "EUR/kg", "valid_from": "2031-03-01", "valid_to": "2031-03-31"}]}
-
-    def test_decoy_only_filing_refuses_complete_and_names_the_rejected_message(self):
-        facts = self.make_casefile()
-        facts.merge("mail", {"messages": [self.index_message("T-7100-A", subject="Index bulletin decoy")]})
-        self.assertIn("index:IX-TIN", dict(facts.questions()))
-        refused = facts.answer("index:IX-TIN", "complete", "two messages filed, the latest carries the rate")
-        self.assertTrue(refused.startswith("not resolved: the case file has no valid record for IX-TIN"), refused)
-        self.assertIn("exactly T-7100 from the authorized sender", refused)
-        self.assertIn("Index bulletin decoy", refused)
-        self.assertIn("reference T-7100-A is not exactly T-7100", refused)
-        self.assertIn("index:IX-TIN", dict(facts.questions()))
-
-    def test_wrong_sender_and_future_messages_are_named_with_their_reason(self):
-        facts = self.make_casefile()
-        facts.merge("mail", {"messages": [
-            self.index_message("T-7100", sender="trainee@maker-works.test", subject="Forwarded index"),
-            self.index_message("T-7100", stamp="2031-04-02T08:00:00Z", subject="Next index")]})
-        refused = facts.answer("index:IX-TIN", "complete", "filed")
-        self.assertIn("sender trainee@maker-works.test is not the authorized one", refused)
-        self.assertIn("after the scenario date", refused)
-
-    def test_exact_record_closes_the_question_and_absent_stays_possible(self):
-        facts = self.make_casefile()
-        facts.merge("mail", {"messages": [self.index_message("T-7100-A")]})
-        self.assertEqual(facts.answer("discount", "absent", "inbox and archive hold no approval"),
-                         "question discount closed as absent")
-        self.assertEqual(facts.answer("index:IX-TIN", "absent", "no bulletin for this tender"),
-                         "question index:IX-TIN closed as absent")
-        facts = self.make_casefile()
-        facts.merge("mail", {"messages": [self.index_message("T-7100-A"), self.index_message("T-7100")]})
-        self.assertNotIn("index:IX-TIN", dict(facts.questions()))
-        self.assertEqual(facts.answer("index:IX-TIN", "complete", "filed"), '"index:IX-TIN" is not an open question')
-
-    def test_discount_complete_is_refused_without_an_authorized_approval(self):
-        facts = self.make_casefile()
-        facts.merge("mail", {"messages": [{
-            "sender": "director@maker-works.test", "timestamp": "2031-03-02T08:00:00Z", "subject": "Discount",
-            "tender_reference": "T-7100-A", "topic": "discount_approval", "discount": {"approves": True, "percent": "3"}}]})
-        refused = facts.answer("discount", "complete", "approval filed")
-        self.assertIn("no valid record for the discount approval", refused)
-        self.assertIn("reference T-7100-A", refused)
-        self.assertIn("discount", dict(facts.questions()))
 
 
 if __name__ == "__main__":

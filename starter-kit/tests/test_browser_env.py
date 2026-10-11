@@ -89,6 +89,9 @@ class FixtureSite:
         if path.startswith("/slow/"):
             time.sleep(self.DELAY)
             path = path[len("/slow"):]
+        if path.startswith("/veryslow/"):  # longer than a click waits: the page load outlasts the click itself
+            time.sleep(4)
+            path = path[len("/veryslow"):]
         if path.startswith("/private/"):
             if not user:
                 return self.send(request, 403, "Sign in first.", TYPES[".txt"])
@@ -110,10 +113,6 @@ class FixtureSite:
             return self.send(request, 200, self.page("account.html", username=html.escape(user)))
         if path == "/orders":
             return self.send(request, 200, self.orders(int(query.get("page") or 1)))
-        if path == "/paged_frame":
-            return self.send(request, 200, self.page("paged_frame.html", links=query.get("links") or "1"))
-        if path == "/sheet":
-            return self.send(request, 200, self.sheet(int(query.get("page") or 1), query.get("links") != "0"))
         if path == "/more-messages":
             time.sleep(self.DELAY)
             after = int(query["after"])
@@ -151,25 +150,6 @@ class FixtureSite:
         previous = f'<a href="/orders?page={number - 1}">Previous page</a>' if number > 1 else ""
         following = f'<a href="/orders?page={number + 1}">Next page</a>' if number < pages else ""
         return self.page("paged_list.html", page=number, pages=pages, rows=rows, previous=previous, next=following)
-
-    SHEETS = 4  # pages of the embedded data sheet, one item each
-
-    def sheet(self, number: int, links: bool) -> str:
-        """One page of the embedded data sheet. Its "Show more" button only ever reports that loading failed; the
-        page's own "Next sheet" link (left out with links=0) leads to the following page."""
-        flag = "" if links else "&links=0"
-        following = (f'<a href="/sheet?page={number + 1}{flag}">Next sheet</a>' if links and number < self.SHEETS else "")
-        previous = f'<a href="/sheet?page={number - 1}{flag}">Previous sheet</a>' if links and number > 1 else ""
-        more = (f'<button type="button" id="more" data-url="/sheet?page={number + 1}{flag}">Show more</button>'
-                if number < self.SHEETS else "")
-        return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Data sheet DS-7</title></head><body>'
-                f"<h1>Data sheet DS-7</h1><table><tr><th>Item</th><th>Length</th></tr>"
-                f"<tr><td>Item S-{number}</td><td>{number * 111} mm</td></tr></table>"
-                f"<p>Page {number} of {self.SHEETS}</p>{previous} {following} {more}"
-                '<p role="status" id="status"></p>'
-                "<script>const more = document.getElementById('more'); if (more) more.addEventListener('click', () => "
-                "{ document.getElementById('status').textContent = 'Loading failed. Please try again.'; });</script>"
-                "</body></html>")
 
     @staticmethod
     def send(request, status: int, body, content_type: str = TYPES[".html"], headers: dict | None = None) -> None:
@@ -621,49 +601,6 @@ class Acting(Case):
         self.assertEqual((tab.last_collect["control"], tab.last_collect["capped"]), ("Next page", False))
         self.assertTrue(tab.last_collect["where"].endswith("/orders?page=2"))
 
-    def every_sheet_once(self, text: str) -> None:
-        for number in range(1, FixtureSite.SHEETS + 1):
-            self.assertEqual(text.count(f"Item S-{number} |"), 1, text)
-
-    async def test_collect_follows_the_next_link_of_a_paged_document_inside_a_frame_to_its_end(self):
-        tab = await self.open("/paged_frame")
-        page = await tab.observe()
-        said = await tab.collect(self.control(page, "link", "Next sheet").id)
-        self.every_sheet_once(tab.document)
-        self.assertEqual((tab.last_collect["pages"], tab.last_collect["capped"]), (FixtureSite.SHEETS, False), said)
-
-    async def test_collect_on_a_load_more_that_fails_goes_on_with_the_documents_own_next_link(self):
-        # the trap of sandbox run dafda06b: the "load more" button of an embedded paged document only fails; collect
-        # stopped after it and the agent never got pages 2 to 5 into one document
-        tab = await self.open("/paged_frame")
-        page = await tab.observe()
-        said = await tab.collect(self.control(page, "button", "Show more").id)
-        self.every_sheet_once(tab.document)
-        self.assertIn('"Show more" loaded nothing new', said)
-        self.assertEqual((tab.last_collect["control"], tab.last_collect["pages"], tab.last_collect["capped"]),
-                         ("Next sheet", FixtureSite.SHEETS, False))
-        self.assertNotIn("Loading failed", tab.document.split("collected page 2")[-1])
-
-    async def test_collect_on_a_load_more_that_fails_says_so_when_the_document_has_no_other_way_on(self):
-        tab = await self.open("/paged_frame?links=0")
-        page = await tab.observe()
-        said = await tab.collect(self.control(page, "button", "Show more").id)
-        self.assertIn('"Show more" loaded nothing new', said)
-        self.assertEqual(tab.last_collect["pages"], 1)
-        self.assertIn("Item S-1 |", tab.document)
-
-    async def test_collect_uses_the_full_safe_page_budget_by_default(self):
-        tab = await self.open("/orders")
-        page = await tab.observe()
-        await tab.collect(self.control(page, "link", "Next page").id)
-        self.assertEqual((tab.last_collect["pages"], tab.last_collect["capped"]), (3, False))
-
-    async def test_collect_uses_the_safe_default_when_the_requested_limit_is_invalid(self):
-        tab = await self.open("/orders")
-        page = await tab.observe()
-        await tab.collect(self.control(page, "link", "Next page").id, max_pages="all")
-        self.assertEqual((tab.last_collect["pages"], tab.last_collect["capped"]), (3, False))
-
     async def test_fill_reads_the_field_back_and_says_when_it_did_not_keep_what_was_typed(self):
         tab = await self.open("/readback.html")
         page = await tab.observe()
@@ -727,6 +664,42 @@ class Acting(Case):
         stranger = await self.open("/downloads.html")
         self.assertIn("opened", await stranger.goto("/private/price_list.csv"))
         self.assertIn("Sign in first.", await stranger.observe())
+
+    async def test_a_click_whose_page_load_is_slow_counts_as_one_click(self):
+        # A local run and scored run a176359f: a click that started a slow page load was reported as failed, and
+        # the fallback then waited 30 s for a control that was gone; on a page that had not moved yet it would
+        # have pressed it a second time (a second code request voids the first code).
+        tab = await self.open("/slow_send.html")
+        said = await tab.click(self.control(await tab.observe(), "button", "Send").id)
+        self.assertTrue(said.startswith("clicked"), said)
+        self.assertEqual([path for method, path, _ in SITE.requests if method == "POST"], ["/veryslow/echo"])
+        self.assertIn("Received", await tab.observe())
+
+    async def test_a_cookie_wall_gets_the_necessary_only_choice(self):
+        tab = await self.open("/cookie_wall.html")
+        said = await tab.choose_necessary_cookies()
+        self.assertIn("Nur notwendige Cookies", said)
+        self.assertIn("/arrived/necessary", tab.page.url)
+
+    async def test_a_page_without_a_cookie_notice_is_left_alone(self):
+        tab = await self.open("/form.html")
+        self.assertIsNone(await tab.choose_necessary_cookies())
+        self.assertTrue(tab.page.url.endswith("/form.html"))
+
+    async def test_a_login_that_goes_through_is_detected_at_once(self):
+        tab = await self.open("/login", LOGIN)
+        started = time.monotonic()
+        said = await tab.login()
+        self.assertIn("logged in", said)
+        self.assertLess(time.monotonic() - started, 6)  # the login form is gone: no fixed wait
+
+    async def test_a_failed_login_is_reported_within_a_bounded_wait(self):
+        # Run a176359f: a login that did not go through cost 78 s + 45 s of waiting before anything changed.
+        tab = await self.open("/login", {"username": LOGIN["username"], "password": "wrong"})
+        started = time.monotonic()
+        said = await tab.login()
+        self.assertIn("login form is still shown", said)
+        self.assertLess(time.monotonic() - started, 15)
 
 
 if __name__ == "__main__":

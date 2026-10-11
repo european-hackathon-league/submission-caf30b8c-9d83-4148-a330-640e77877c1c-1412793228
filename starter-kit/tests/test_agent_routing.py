@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import agent  # noqa: E402
-from agent import Team, questions_for_site  # noqa: E402
+from agent import Team, batch_hint, questions_for_site  # noqa: E402
 
 
 class FakeCase:
@@ -42,7 +42,6 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         agent.SITE_ROLES.clear()
         agent.RELEASED.clear()
-        agent.TOPIC_SITES.clear()
 
     tearDown = setUp
 
@@ -68,17 +67,19 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
             agent.SITE_ROLES.update({"erp": "warenwirtschaft", "mail": "postfach"})
             self.assertEqual([q for q, _ in questions_for_site("warenwirtschaft", questions)], ["material:REQ-1"])
             self.assertEqual([q for q, _ in questions_for_site("postfach", questions)], ["discount", "reserve:REQ-2"])
-            # a site that merely contains "mail" in its name but is not the mailbox gets everything but the mail
-            # records: those belong to the mailbox the brief names (run 72e78b8e)
+            # a site that merely contains "mail" in its name but is not the mailbox is not routed as one; it leaves
+            # the ERP's and the mailbox's questions to them (round-3 run: ~25 turns searching for a mail record)
+            self.assertEqual(questions_for_site("mailing-list-portal", questions), [("positions", "p")])
+            agent.RELEASED.add("reserve:REQ-2")  # left open by the mailbox agent: offered to every agent
             self.assertEqual([q for q, _ in questions_for_site("mailing-list-portal", questions)],
-                             ["positions", "material:REQ-1"])
+                             ["positions", "reserve:REQ-2"])
         finally:
             agent.SITE_ROLES.clear()
 
 
     async def test_a_routed_question_left_open_is_offered_to_every_agent(self):
-        """A non-mail question its routed agent left open reaches every agent; a mail record whose website the brief
-        names stays with that website (run 72e78b8e: released reserve questions were bounced by the ERP agent)."""
+        """The private dataset may split facts differently: here the packaging tariff sits in the ERP, so the mail
+        agent finishes without it. The question must reach the ERP agent instead of staying with nobody."""
         case = FakeCase()
         case.open_questions = [("packaging_tariff:PKG-9", "the tariff"), ("material:REQ-1", "the material")]
         case._bump = lambda: (setattr(case, "version", case.version + 1), case.changed.set())
@@ -88,32 +89,14 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
             erp_waiting = asyncio.create_task(team.hook("erp")("done"))  # ERP finished its own question set
             await asyncio.sleep(0.02)
             self.assertIn("material:REQ-1", agent.RELEASED)  # ERP went idle with it open and nothing being read
-            self.assertIn("material:REQ-1", [q for q, _ in questions_for_site("mail", case.questions())])
             mail_waiting = asyncio.create_task(team.hook("mail")("done"))  # mail finished without the tariff
-            await asyncio.sleep(0.05)
-            self.assertNotIn("packaging_tariff:PKG-9", agent.RELEASED)
-            self.assertNotIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("erp", case.questions())])
-            self.assertIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("mail", case.questions())])
-            erp_waiting.cancel()
+            news = await asyncio.wait_for(erp_waiting, 2)
+            self.assertIn("packaging_tariff:PKG-9", news or "")
+            self.assertIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("erp", case.questions())])
             mail_waiting.cancel()
         finally:
             agent.SITE_ROLES.clear()
             agent.RELEASED.clear()
-
-    def test_a_topic_the_brief_keeps_on_another_website_goes_there(self):
-        """The private dataset may split facts differently (eval variant B: an approval register in the ERP): the
-        brief's record_sites send that topic's questions to that website's agent alone."""
-        questions = [("packaging_tariff:PKG-9", "t"), ("discount", "d"), ("material:REQ-1", "m")]
-        try:
-            agent.SITE_ROLES.update({"erp": "erp", "mail": "mail"})
-            agent.TOPIC_SITES.update({"packaging_tariffs": "erp"})
-            self.assertEqual([q for q, _ in questions_for_site("erp", questions)],
-                             ["packaging_tariff:PKG-9", "material:REQ-1"])
-            self.assertEqual([q for q, _ in questions_for_site("mail", questions)], ["discount"])
-            self.assertEqual([q for q, _ in questions_for_site("portal", questions)], ["material:REQ-1"])
-        finally:
-            agent.SITE_ROLES.clear()
-            agent.TOPIC_SITES.clear()
 
     def test_nothing_is_released_while_documents_are_still_being_read(self):
         case = FakeCase()
@@ -135,6 +118,33 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
 
         case.update(("material:REQ-1", "Find a matching ERP material."))
         self.assertIn("material:REQ-1", await waiting)
+
+
+class BatchHint(unittest.TestCase):
+    """The file_each nudge: suggest batching once after repeated one-by-one filings of one kind."""
+
+    def test_fires_once_after_three_same_kind_filings(self):
+        counter: dict = {}
+        self.assertEqual(batch_hint(counter, "material", True), "")
+        self.assertEqual(batch_hint(counter, "material", True), "")
+        hint = batch_hint(counter, "material", True)
+        self.assertIn("file_each", hint)
+        self.assertEqual(batch_hint(counter, "material", True), "")  # only once per streak
+
+    def test_a_different_kind_resets_the_streak(self):
+        counter: dict = {}
+        batch_hint(counter, "material", True)
+        batch_hint(counter, "material", True)
+        self.assertEqual(batch_hint(counter, "price_conditions", True), "")
+        self.assertEqual(batch_hint(counter, "material", True), "")
+        self.assertEqual(batch_hint(counter, "material", True), "")
+        self.assertIn("file_each", batch_hint(counter, "material", True))
+
+    def test_nothing_filed_or_no_kind_is_silent(self):
+        counter: dict = {}
+        self.assertEqual(batch_hint(counter, "material", False), "")
+        self.assertEqual(batch_hint(counter, "", True), "")
+        self.assertEqual(counter, {})
 
 
 if __name__ == "__main__":

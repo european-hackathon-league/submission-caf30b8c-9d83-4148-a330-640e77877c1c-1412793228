@@ -12,7 +12,6 @@ import hashlib
 import json
 import os
 import re
-import unicodedata
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -23,7 +22,7 @@ from browser_env import PAGE_BREAK
 from sanity import same_value
 from calculator import (Authorities, BonusBand, Clarification, Commitment, MASS_TO_GRAMS, Material, Position,
                         PriceCondition, Requirement, active_clarifications, base_price, final_quantities,
-                        match_material, merged_assignments, parse_number, parse_when, resolve_requirements, same_revision, same_text)
+                        match_material, merged_assignments, parse_number, parse_when, resolve_requirements, same_text)
 
 TOPICS = ("discount_approval", "condition_rules", "price_indices", "tech_release", "packaging_tariffs",
           "delivery_release", "fx_fixing", "setup_pools", "project_bonus")
@@ -128,198 +127,8 @@ CONTEXT_SHAPE = """From the task brief, as JSON:
  "erp_site": "<the id, from the list of this run's websites, of the company's ERP or inventory system (materials, stock, price conditions)>",
  "authorized_senders": {"discount_approval": "<mailbox local part the brief authorizes for discount approvals>",
    "condition_rules": "...", "price_indices": "...", "tech_release": "...", "packaging_tariffs": "...",
-   "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."},
- "authorized_subjects": {"discount_approval": "<the subject word the brief names for these messages>",
-   "condition_rules": "...", "price_indices": "...", "tech_release": "...", "packaging_tariffs": "...",
-   "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."},
- "mail_search_hint": "<the brief's own advice on how to search the mailbox, in one short sentence, or null>",
- "record_sites": {"<topic>": "<site id>"}}
-The local part is what stands before the @; null for a topic the brief names no sender for. A subject word is the
-message subject or document name the brief gives for that topic (for example in a list of subject/sender pairs, or
-"the latest <subject> message"), copied exactly as written, without the tender reference; null when the brief names
-none. record_sites: only a topic whose records the brief says are kept on a website OTHER than the mailbox (for
-example an approval register in the ERP), with that website's id; leave out every other topic ({} when none)."""
-
-# The open questions that ask for a mail record, by question id prefix, and the brief's topic that authorizes it.
-MAIL_QUESTION_TOPICS = {"discount": "discount_approval", "condition_group": "condition_rules",
-                        "packaging_tariff": "packaging_tariffs", "delivery_commitment": "delivery_release",
-                        "setup_pool": "setup_pools", "project_bonus": "project_bonus", "index": "price_indices",
-                        "fx": "fx_fixing", "reserve": "tech_release"}
-
-
-def mail_topic(qid: str) -> str | None:
-    """The brief's topic of a question whose evidence is a mail record ("search:<topic>" asks for one search of a
-    prescribed topic); "" for the mailbox address itself; None for every other question."""
-    prefix, _, key = qid.partition(":")
-    if prefix == "mailbox":
-        return ""
-    if prefix == "search":
-        return key if key in TOPICS else None
-    return MAIL_QUESTION_TOPICS.get(prefix)
-
-
-_FOLD = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
-
-
-def _words(text: str) -> list[str]:
-    """Search words in one spelling: case and umlauts folded, punctuation dropped."""
-    return re.findall(r"[a-z0-9]+", str(text or "").casefold().translate(_FOLD))
-
-
-def mentions(text: str, word: str) -> bool:
-    """Whether a search text names a subject word: the word itself, also with its umlauts written out or dropped,
-    or a cut-off form of at least five letters (a singular, a stem)."""
-    if not _words(word):
-        return False
-    for spelling in (text, _plain(text)):
-        typed = _words(spelling)
-        joined = " ".join(typed)
-        for target in (_words(word), _words(_plain(word))):
-            if f" {' '.join(target)} " in f" {joined} ":
-                return True
-            if len(target) == 1 and any(len(token) >= 5 and (target[0].startswith(token) or token.startswith(target[0]))
-                                        for token in typed):
-                return True
-    return False
-
-
-def _plain(text: str) -> str:
-    """The text with its accents and umlauts dropped (ü -> u), the other usual way to type them."""
-    return "".join(ch for ch in unicodedata.normalize("NFKD", str(text or "")) if not unicodedata.combining(ch))
-
-# The parts of the case-file status (CaseFile.status) and which of them an open question concerns, by its id prefix:
-# an investigator is shown the lines its own questions are about, not every other agent's facts. A question of a
-# kind not listed here gets all of them.
-STATUS_SECTIONS = ("positions", "qa", "spec", "requirements", "materials", "authorities")
-QUESTION_SECTIONS = {"positions": ("positions",), "clarifications": ("qa", "positions"), "mailbox": (),
-                     "revision": ("spec",), "requirements": ("spec", "requirements"),
-                     "reserve": ("requirements", "authorities"), "material": ("requirements", "materials"),
-                     "data": ("materials",)}
-# ... and which of them a kind of evidence an agent filed fills (so that it sees what its filings brought)
-KIND_SECTIONS = {"positions": ("positions",), "clarifications": ("qa", "positions"), "revisions": ("spec",),
-                 "requirements": ("spec", "requirements"), "material": ("materials",),
-                 "price_conditions": ("materials",), "mail": ("authorities",)}
-
-
-def status_sections(question_ids, kinds=()) -> set[str]:
-    """The case-file sections that open questions (by id) and filed kinds of evidence concern."""
-    wanted: set[str] = set()
-    for qid in question_ids:
-        prefix = str(qid).split(":", 1)[0]
-        if prefix in QUESTION_SECTIONS:
-            wanted.update(QUESTION_SECTIONS[prefix])
-        elif mail_topic(str(qid)) is not None:
-            wanted.add("authorities")
-        else:
-            wanted.update(STATUS_SECTIONS)
-    for kind in kinds:
-        wanted.update(KIND_SECTIONS.get(kind, ()))
-    return wanted
-
-
-# Where a brief's rules begin: a heading, a "Rules" line or a first numbered rule.
-_RULES_START = re.compile(r"(?i)^\s*(?:#{1,6}\s|(?:\*\*)?(?:bid\s+)?(?:rules|regeln)\b|1[.)]\s)")
-INTRO_LIMIT = 2000  # characters of the brief's task paragraph an investigator's task card may carry
-
-
-def brief_intro(brief: str, limit: int = INTRO_LIMIT) -> str:
-    """The brief's own task paragraph: what comes before its first rules heading (a leading title line is kept).
-    Empty when the brief has no such boundary, or when what comes before it is longer than `limit` and cannot be
-    cut at a paragraph."""
-    lines = brief.strip().splitlines()
-    start = 1 if lines and lines[0].lstrip().startswith("#") else 0
-    end = next((index for index in range(start, len(lines)) if _RULES_START.match(lines[index])), None)
-    if end is None:
-        return ""
-    text = "\n".join(lines[:end]).strip()
-    if len(text) > limit:
-        cut = text.rfind("\n\n", 0, limit)
-        text = text[:cut].strip() if cut > 0 else ""
-    return text if text and text != lines[0].strip() else ""
-
-
-def brief_site_lines(brief: str, site: str, skip: str = "", limit: int = 600) -> str:
-    """The brief's sentences that name the website `site` by its id (what it holds), up to `limit` characters;
-    sentences already in `skip` (the task paragraph on the card) are left out."""
-    if not site:
-        return ""
-    name = re.compile(r"(?<![\w./-])`?" + re.escape(site) + r"`?(?![\w/-])", re.IGNORECASE)
-    flat = " ".join(line.strip() for line in brief.splitlines() if line.strip() and not line.lstrip().startswith("#"))
-    picked, size, known = [], 0, " ".join(skip.split())
-    for sentence in re.split(r"(?<=[.!?])\s+", flat):
-        if name.search(sentence) and " ".join(sentence.split()) not in known and "://" not in sentence and size + len(sentence) <= limit:
-            picked.append(sentence)
-            size += len(sentence) + 1
-    return " ".join(picked)
-
-
-# Words by which a rule of the brief concerns an open question, by the question's id prefix. Mail-record questions
-# also take MAIL_WORDS. Generic business words (English with German stems), no scenario values.
-QUESTION_WORDS = {
-    "positions": ("position", "quantit", "menge"),
-    "clarifications": ("clarification", "q&a", "withdraw", "amendment", "änderung", "zurückzieh"),
-    "mailbox": ("mailbox", "webmail"),
-    "revision": ("revision", "specification", "spezifikation"),
-    "requirements": ("requirement", "specification", "revision", "per set", "anforderung"),
-    "reserve": ("reserve", "usable", "travel", "release", "freigabe"),
-    "material": ("material", "catalog", "katalog", "erp", "blocked", "active"),
-    "data": ("stock", "lead time", "price condition", "scale", "carton", "mass", "index", "lager"),
-    "discount": ("discount", "approv", "rabatt"),
-    "condition_group": ("condition", "clause", "kondition"),
-    "packaging_tariff": ("packaging", "tariff", "verpackung"),
-    "delivery_commitment": ("delivery", "commitment", "liefer"),
-    "setup_pool": ("setup", "pool", "rüst"),
-    "project_bonus": ("bonus",),
-    "index": ("index", "indices", "surcharge"),
-    "fx": ("currency", "fx", "exchange", "devisen"),
-}
-MAIL_WORDS = ("sender", "subject", "mail search", "authoriz")
-RULES_LIMIT = 2500  # characters of brief rules a gate-1 turn may carry
-_NOT_FOR_SEARCH = re.compile(r"(?i)\bscor(?:e|ing)\b|\bpoints\b")  # how the bid is scored: no help in finding records
-_UNIT_START = re.compile(r"^\s*(?:[-*•]\s|\d+[.)]\s)")
-
-
-def brief_rules(brief: str, question_ids, limit: int = RULES_LIMIT) -> str:
-    """The rules of `brief` (its bullet and numbered lines and paragraphs) that name a topic of the open questions,
-    most relevant first up to `limit` characters, in the brief's order. The whole brief when it has no such structure
-    to cut (fewer than three rules); empty when no rule concerns the questions."""
-    units: list[str] = []
-    current: list[str] = []
-    for line in brief.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            if current:
-                units.append("\n".join(current))
-            current = []
-        elif _UNIT_START.match(line) and current:
-            units.append("\n".join(current))
-            current = [line]
-        else:
-            current.append(line)
-    if current:
-        units.append("\n".join(current))
-    if len(units) < 3:
-        return brief.strip()
-    words: set[str] = set()
-    for qid in question_ids:
-        prefix = str(qid).split(":", 1)[0]
-        words.update(QUESTION_WORDS.get(prefix, ()))
-        if mail_topic(str(qid)):
-            words.update(MAIL_WORDS)
-    scored = []
-    for index, unit in enumerate(units):
-        if _NOT_FOR_SEARCH.search(unit):
-            continue
-        text = unit.casefold()
-        score = sum(1 for word in words if re.search(r"(?<![\w])" + re.escape(word), text))
-        if score:
-            scored.append((-score, index, unit))
-    chosen, size = [], 0
-    for _, index, unit in sorted(scored):
-        if size + len(unit) <= limit:
-            chosen.append((index, unit.strip()))
-            size += len(unit) + 1
-    return "\n".join(unit for _, unit in sorted(chosen))
-
+   "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."}}
+The local part is what stands before the @; null for a topic the brief names no sender for."""
 
 _PIECE_UNITS = {"stk", "stk.", "st", "st.", "stück", "stueck", "pc", "pcs", "pcs.", "piece", "pieces", "ea", "each", "einzelstück", "einzelstueck"}
 _SET_UNITS = {"satz", "sätze", "saetze", "set", "sets", "kit", "kits"}
@@ -481,17 +290,6 @@ class CaseFile:
         self.vat_id = _text(context.get("vat_id")) or ""
         senders = context.get("authorized_senders") or {}
         self.senders = {topic: (_text(senders.get(topic)) or "").split("@")[0].lower() for topic in TOPICS}
-        subjects = context.get("authorized_subjects")
-        subjects = subjects if isinstance(subjects, dict) else {}
-        self.subjects = {topic: self._subject_word(subjects.get(topic)) for topic in TOPICS}
-        self.mail_hint = _text(context.get("mail_search_hint")) or ""
-        # A topic the brief keeps on another website than the mailbox (an approval register in the ERP); the agent
-        # module keeps only real site ids of the run (solve).
-        places = context.get("record_sites")
-        places = places if isinstance(places, dict) else {}
-        self.record_sites = {topic: str(places[topic]).strip() for topic in TOPICS
-                             if isinstance(places.get(topic), str) and _text(places[topic])}
-        self.mail_searches: list[str] = []  # what the mail agent typed into the mailbox's search (note_search)
         self.mailbox: str | None = None
         self.positions: dict[str, dict] = {}
         self.clarifications: dict[str, dict] = {}
@@ -503,6 +301,9 @@ class CaseFile:
         self.evidence: list[dict] = []  # extracted records, retained with the page and agent that supplied them
         self.conflicts: list[str] = []  # where a later document replaced a different value of an earlier one
         self.answers: dict[str, tuple[str, str]] = {}  # question id -> (complete | absent, note)
+        # Fix #2: question id -> the agent that filed the whole list it asks for (a Q&A list `collect` followed to its
+        # own end); the question closes by itself once that agent's documents are read (see questions()).
+        self.listed_in_full: dict[str, str] = {}
         self.filed: set[str] = set()
         self.news: dict[str, list[str]] = {}
         self.pending = 0
@@ -697,73 +498,22 @@ class CaseFile:
         for key, row in self.revisions.items():
             when = parse_when(row.get("date"))
             if row.get("status") == "current" and (when is None or when <= self.scenario):
-                filed = any(same_revision(key, revision) for revision in with_requirements)
+                filed = any(same_text(key, revision) for revision in with_requirements)
                 current.append((filed, when or datetime.min.replace(tzinfo=timezone.utc), key))
         return max(current)[2] if current else None
 
     def _authorized(self, row: dict, topic: str) -> bool:
         """The brief's test for a record: exact tender reference, authorized sender, not after the scenario date."""
-        return not self._rejection(row, topic)
-
-    def _rejection(self, row: dict, topic: str) -> str:
-        """Why a filed message does not count as a record of `topic` ("" when it does)."""
         sender = (_text(row.get("sender")) or "").lower()
         local, _, domain = sender.partition("@")
         if self.senders.get(topic) and local != self.senders[topic]:
-            return f"sender {sender or '?'} is not the authorized one"
-        if self.mailbox and domain and domain != self.mailbox.lower().partition("@")[2]:
-            return f"sender domain {domain} is not the bidder's"
-        reference = _text(row.get("tender_reference")) or ""
-        if reference.upper() != self.reference.upper():
-            return f"reference {reference or 'none'} is not exactly {self.reference}"
-        when = parse_when(row.get("timestamp"))
-        if when is not None and when > self.scenario:
-            return f"dated {row.get('timestamp')}, after the scenario date"
-        return ""
-
-    def _record_on_file(self, question: str, authorities: Authorities) -> bool | None:
-        """For a question whose evidence is an authorized mail record for one key: whether the case file holds a
-        valid record for it (the test `questions()` asks by). None for every other question."""
-        prefix, _, key = question.partition(":")
-        stores = {"index": authorities.index_rates, "fx": authorities.fx, "reserve": None,
-                  "delivery_commitment": authorities.commitments, "condition_group": authorities.clauses,
-                  "packaging_tariff": authorities.tariffs, "setup_pool": authorities.pools,
-                  "project_bonus": authorities.bonus}
-        if prefix == "discount" and not key:
-            return authorities.discount_percent is not None
-        if prefix not in stores:
-            return None
-        if prefix == "reserve":  # keyed by the requirement; the reserve key it waits for is checked by questions()
             return False
-        return key in stores[prefix]
-
-    def _record_refusal(self, question: str) -> str:
-        """The refusal of "complete" for a record question with no valid record on file, naming the filed messages
-        of the topic that were rejected and why (run b462cdb3: only a decoy with a suffixed reference was filed and
-        the agent closed the index question as complete)."""
-        prefix, _, key = question.partition(":")
-        topic = MAIL_QUESTION_TOPICS[prefix]
-        block = "discount" if topic == "discount_approval" else topic
-        what = key or "the discount approval"
-        rejected, unused = [], []
-        for row in self.messages.values():
-            if not (row.get(block) or row.get("topic") == topic):
-                continue
-            name = f"\"{row.get('subject')}\" from {row.get('sender')} at {row.get('timestamp')}"
-            why = self._rejection(row, topic)
-            if why:
-                rejected.append(f"{name} ({why})")
-            else:
-                unused.append(name)
-        text = (f"not resolved: the case file has no valid record for {what} (only records for other "
-                f"references/senders or none were filed): open the message for exactly {self.reference} from the "
-                "authorized sender and file it")
-        if rejected:
-            text += ". Filed but rejected: " + "; ".join(rejected[:6])
-        if unused:
-            text += (f". Filed and authorized, but defining no valid {what} (another key, or not valid on the "
-                     "scenario date): " + "; ".join(unused[:6]))
-        return text + ". Answer absent only if the inbox and the archive hold no such record."
+        if self.mailbox and domain and domain != self.mailbox.lower().partition("@")[2]:
+            return False
+        if (_text(row.get("tender_reference")) or "").upper() != self.reference.upper():
+            return False
+        when = parse_when(row.get("timestamp"))
+        return when is None or when <= self.scenario
 
     def authorities(self) -> Authorities:
         result = Authorities()
@@ -880,7 +630,7 @@ class CaseFile:
                 clarifications.append(Clarification(f"mail:{key}", when, quantity_changes=changes))
         requirements = {}
         for (revision, ref), row in self.requirements.items():
-            if governing and revision and not same_revision(revision, governing):
+            if governing and revision and not same_text(revision, governing):
                 continue
             if not governing and revision:
                 continue
@@ -910,112 +660,9 @@ class CaseFile:
         return SimpleNamespace(governing=governing, positions=positions, clarifications=clarifications,
                                requirements=requirements, materials=materials, authorities=self.authorities(),
                                no_material={qid.split(":", 1)[1] for qid, (status, _) in self.answers.items()
-                                            if qid.startswith(("material:", "candidates:")) and status == "absent"})
+                                            if qid.startswith("material:") and status == "absent"})
 
     # ---- what is still unknown -------------------------------------------------------------------------------
-
-    def _subject_word(self, value) -> str:
-        """The subject word the model read from the brief for one topic, without the tender reference (the search
-        hint adds it) and without quotes the model may have copied around it."""
-        if isinstance(value, list):
-            value = next((item for item in value if _text(item)), None)
-        text = _text(value) if isinstance(value, (str, int, float)) else None
-        if not text:
-            return ""
-        if self.reference:
-            text = re.sub(re.escape(self.reference), " ", text, flags=re.IGNORECASE)
-        return re.sub(r"\s+", " ", text).strip(" \"'„“”«»:-–—") or ""
-
-    def mail_search(self, topic: str) -> str:
-        """Where the brief says a topic's record is found: the words to search and the authorized sender. Sandbox
-        runs 9ac58b69, 472732d2 and 63f3be2e: without the brief's subject word the mail agent guessed search words,
-        and a guess that finds nothing was repeated up to 10 times (mail search combines its words with AND)."""
-        subject, sender = self.subjects.get(topic, ""), self.senders.get(topic, "")
-        words = f"{self.reference} {subject}".strip() if subject else ""
-        domain = self.mailbox.partition("@")[2] if self.mailbox and "@" in self.mailbox else ""
-        parts = [f"Search words: {words}" if words else
-                 f"Search words: {self.reference} plus a subject word from the brief".strip()]
-        if sender:
-            parts.append(f"authorized sender: {sender}@{domain or '<bidder mailbox domain>'}")
-        if not self.record_sites.get(topic):
-            parts.append("look in the inbox and the archive")
-        return "; ".join(parts)
-
-    def mail_where(self, topic: str) -> str:
-        """Where a topic's record is kept, said in the question itself: run 72e78b8e's mail agent finished with the
-        reserve questions open, calling them records of the customer portal, and the ERP agent sent them back."""
-        site = self.record_sites.get(topic)
-        if site:
-            return f"Where: the website {site}, where the brief keeps these records."
-        return ("Where: the sales mailbox (inbox and archive); the brief prescribes a mail message for this, so it is "
-                "not a record of another website.")
-
-    def prescribed_topics(self) -> list[str]:
-        """The topics the brief names a subject word or an authorized sender for, in the brief's topic order."""
-        return [topic for topic in TOPICS if self.subjects.get(topic) or self.senders.get(topic)]
-
-    def note_search(self, text: str) -> None:
-        """Words the mail agent typed into the mailbox's search (or into an address it opened). A prescribed topic
-        whose subject word (or, without one, its sender) they name counts as searched."""
-        text = " ".join(str(text or "").split())
-        if not text or text in self.mail_searches:
-            return
-        before = self.searched_topics()
-        self.mail_searches.append(text)
-        if self.searched_topics() != before:
-            self._bump()
-
-    def searched_topics(self) -> set[str]:
-        found = set()
-        for topic in self.prescribed_topics():
-            word = self.subjects.get(topic) or self.senders.get(topic)
-            if any(mentions(text, word) for text in self.mail_searches):
-                found.add(topic)
-        return found
-
-    def filed_topics(self) -> set[str]:
-        """Topics a filed message is about (its topic, a block of facts for it, or the subject word in its subject),
-        whatever its reference or sender: the search for the topic found something."""
-        found = set()
-        for row in self.messages.values():
-            for topic in TOPICS:
-                word = self.subjects.get(topic)
-                if (row.get("topic") == topic or row.get(topic) or (topic == "discount_approval" and row.get("discount"))
-                        or (word and mentions(str(row.get("subject") or ""), word))):
-                    found.add(topic)
-        return found
-
-    def mail_checklist(self, questions: list[tuple[str, str]]) -> str:
-        """One view of every mail record still needed, by topic, so that the mail agent can plan its searches
-        instead of meeting the topics one question at a time. Empty when no mail record is asked for. A prescribed
-        topic nobody has searched for yet is on it too ("search:<topic>"), before any of its keys is known."""
-        wanted: dict[str, list[str]] = {}
-        for qid, _ in questions:
-            topic = mail_topic(qid)
-            if topic:
-                wanted.setdefault(topic, [])
-                prefix, _, key = qid.partition(":")
-                if key and prefix != "search":
-                    wanted[topic].append(key)
-        if not wanted:
-            return ""
-        lines = ["MAIL CHECKLIST: every mail record still needed, one line per topic, with the subject word and "
-                 "sender the brief prescribes. Plan before you search: one search per subject word (or one search "
-                 "on the reference alone, read page by page), in the inbox AND the archive, then open each hit and "
-                 "file it with keep, or several hits of one result list with file_each. One message often defines "
-                 "several keys. Search every topic marked NOT SEARCHED YET once now, before its keys are asked for: "
-                 "the positions will need them. A search that finds nothing is not repeated with the same words: "
-                 "change the words or the folder."]
-        if self.mail_hint:
-            lines.append(f"The brief on mail search: {self.mail_hint}")
-        searched = self.searched_topics() | self.filed_topics()
-        for topic in TOPICS:
-            if topic in wanted:
-                keys = sorted(set(wanted[topic]))
-                mark = "" if topic in searched or topic not in self.prescribed_topics() else " (NOT SEARCHED YET)"
-                lines.append(f"- {topic.replace('_', ' ')}" + (f" ({', '.join(keys)})" if keys else "")
-                             + f": {self.mail_search(topic)}{mark}")
-        return "\n".join(lines)
 
     def questions(self) -> list[tuple[str, str]]:
         """The open questions, derived from the brief's rules and the facts on file: id and what to find."""
@@ -1023,12 +670,16 @@ class CaseFile:
         found: list[tuple[str, str]] = []
 
         def ask(qid: str, text: str) -> None:
-            if qid not in self.answers and all(qid != earlier for earlier, _ in found):
+            if qid not in self.answers:
                 found.append((qid, text))
 
         if not facts.positions:
             ask("positions", "The tender's bill of quantities: every position with its number, quantity, unit and "
                              "requirement reference.")
+        filer = self.listed_in_full.get("clarifications")
+        if (filer and "clarifications" not in self.answers and self.clarifications
+                and not self.pending_for(filer)):
+            self.answers["clarifications"] = ("complete", "the Q&A list was followed to its end, filed and read")
         ask("clarifications", "Every answer in the tender's bidder Q&A, on all of its pages: quantity changes, "
                               "withdrawn answers, technical amendments and the keys an answer assigns to a position. "
                               "Answer this question complete once every page of the Q&A is filed.")
@@ -1041,62 +692,35 @@ class CaseFile:
         answers = active_clarifications(facts.clarifications, self.scenario)
         needs, waiting = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
         if facts.governing:
-            # Complete once bore, stroke and mounting are on file: pressure, catalogue group and certification are
-            # optional (calculator `unmatchable`). Eval variant B: the specification states neither pressure nor
-            # group, and the customer-portal agent hunted 28 steps for fields that do not exist.
-            lacking = [ref for ref in refs if ref not in needs or needs[ref].unmatchable()]
+            lacking = [ref for ref in refs if ref not in needs or needs[ref].missing() or not needs[ref].catalogue_group]
             sets = {p.requirement_ref for p in facts.positions if p.is_set}
             lacking += [ref for ref in sets if ref in needs and not needs[ref].pieces_per_set and ref not in lacking]
             if lacking:
                 ask("requirements", f"In specification revision {facts.governing} (the current one), the requirements "
                                     f"{', '.join(lacking)} in full: bore, stroke (nominal or usable travel, with its reserve key), "
-                                    "mounting, pieces per set; pressure, certification and catalogue group where the "
-                                    "specification states them.")
+                                    "pressure, mounting, certification, catalogue group, pieces per set.")
         for ref, key in waiting.items():
             ask(f"reserve:{ref}", f"The technical release for specification revision {facts.governing} that gives the "
-                                  f"per-end reserve ({key}): requirement {ref} states a usable travel. "
-                                  f"{self.mail_ask('tech_release')}")
+                                  f"per-end reserve ({key}): requirement {ref} states a usable travel.")
         assigned, _ = merged_assignments(answers)
         quantities, _ = final_quantities(facts.positions, answers, needs)
         matched: dict[str, Material] = {}
         for ref in refs:
             need = needs.get(ref)
-            # A requirement without a stated pressure or catalogue group can still be matched (calculator
-            # `unmatchable`); eval variant B: no catalogue group, so no material question arose and the ERP agent
-            # finished at once with nothing filed.
-            if need is None or ref in waiting or need.unmatchable():
-                continue
-            audit_id = f"candidates:{ref}"
-            audit = self.answers.get(audit_id)
-            if audit is None:
-                seen = [f"{m.number} ({'active' if m.active else 'not active' if m.active is False else 'status unknown'}, "
-                        f"{m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification})"
-                        for m in facts.materials if need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
-                ask(audit_id, f"ERP catalogue-candidate audit for requirement {ref}, catalogue group "
-                              f"{need.catalogue_group}: search the group, collect every results page (repeat collect "
-                              "if capped), then open and file each returned material's technical data and sales status "
-                              "before selecting or pricing any one record. Candidates on file for this group: "
-                              f"{'; '.join(seen) or 'none yet'}. Answer complete only after the result list has ended "
-                              "and every candidate is fully filed; answer absent only when the exhaustive search returned no candidates.")
-            elif audit[0] == "absent":
+            if need is None or ref in waiting or need.missing():
                 continue
             material = match_material(need, facts.materials)
             if material is None:
-                group = need.catalogue_group
                 seen = [f"{m.number} ({'active' if m.active else 'not active' if m.active is False else 'status unknown'}, "
                         f"{m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification})"
-                        for m in facts.materials if (same_text(m.catalogue_group, group) if group
-                                                     else m.bore_mm == need.bore_mm)]
-                where = (f"in catalogue group {group}" if group else
-                         "(the specification names no catalogue group: search the ERP by its attributes or description)")
-                ask(f"material:{ref}", f"The ERP material for requirement {ref}: active, {where}, bore {need.bore_mm} mm, "
-                                       f"stroke {need.stroke_mm} mm, "
-                                       + (f"{need.pressure_bar} bar, " if need.pressure_bar is not None else "")
-                                       + f"mounting {need.mounting}, certification "
+                        for m in facts.materials if need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
+                ask(f"material:{ref}", f"The ERP material for requirement {ref}: active, in catalogue group "
+                                       f"{need.catalogue_group}, bore {need.bore_mm} mm, stroke {need.stroke_mm} mm, "
+                                       f"{need.pressure_bar} bar, mounting {need.mounting}, certification "
                                        f"{need.certification or 'none'}. File each candidate's technical data and status, "
                                        "also a candidate that seems not to match: the case file does the matching. "
-                                       f"On file {'for this group' if group else 'with this bore'}: {'; '.join(seen) or 'nothing yet'}. "
-                                       "Answer absent only when every candidate is on file and none matches.")
+                                       f"On file for this group: {'; '.join(seen) or 'nothing yet'}. Answer absent only "
+                                       "when every material of the group is on file and none matches.")
                 continue
             matched[ref] = material
             gaps = [label for label, value in (("stock quantity", material.stock), ("lead time from stock", material.stock_lead_weeks),
@@ -1109,9 +733,8 @@ class CaseFile:
                 ask(f"data:{material.number}", f"ERP material {material.number} (it matches requirement {ref}) still lacks: "
                                                f"{'; '.join(gaps)}.")
         if facts.authorities.discount_percent is None:
-            ask("discount", f"The sales director's most recent discount approval for exactly {self.reference}. File "
-                            "the approval; answer absent if no approval exists. "
-                            f"{self.mail_ask('discount_approval')}")
+            ask("discount", f"The sales director's most recent discount approval for exactly {self.reference} (inbox and "
+                            "archive). File the message; answer absent if no approval exists.")
         labels = {"condition_group": ("the condition rules message", facts.authorities.clauses),
                   "packaging_tariff": ("the packaging tariffs message", facts.authorities.tariffs),
                   "delivery_commitment": ("the delivery release message", facts.authorities.commitments),
@@ -1125,45 +748,20 @@ class CaseFile:
                     need = needs.get(next((p.requirement_ref for p in facts.positions if p.position == position), ""))
                     if kind == "delivery_commitment" and need is not None and need.ref in matched:
                         extra = f" (the position's material is {matched[need.ref].number})"
-                    ask(f"{kind}:{key}", f"For {self.reference}: {label} that defines {key}, assigned to position {position}{extra}. "
-                                         f"{self.mail_ask(MAIL_QUESTION_TOPICS[kind])}")
+                    ask(f"{kind}:{key}", f"For {self.reference}: {label} that defines {key}, assigned to position {position}{extra}.")
         for material in matched.values():
             if material.index_code and material.index_code not in facts.authorities.index_rates:
                 ask(f"index:{material.index_code}", f"For {self.reference}: the latest price index message with the rate of "
-                                                    f"{material.index_code} (material {material.number}). "
-                                                    f"{self.mail_ask('price_indices')}")
-        # The FX rate for every candidate on file, not only the selected material: a foreign-currency condition cannot
-        # be priced without it, and asking only after the selection was too late in run 72e78b8e (never reached).
-        for material in sorted(facts.materials, key=lambda m: (m not in matched.values(), m.number)):
+                                                    f"{material.index_code} (material {material.number}).")
             for condition in material.conditions:
                 if condition.valid_on(self.scenario) and condition.currency != "EUR" and (condition.fx_key or "") not in facts.authorities.fx:
                     ask(f"fx:{condition.fx_key}", f"For {self.reference}: the FX fixing message with the rate of "
-                                                  f"{condition.fx_key} ({condition.currency}, material {material.number}). "
-                                                  f"{self.mail_ask('fx_fixing')}")
-        # Every topic the brief prescribes a subject or sender for is searched once, early, before its keys are
-        # known (runs 72e78b8e, 65a5d83b: Technikfreigabe and Devisenfixing were never searched). A topic with a
-        # question of its own already open is asked there; the search question closes by itself once the mail agent
-        # typed the topic's subject word (or sender) into a search, or once a message about it is on file.
-        asked = {mail_topic(qid) for qid, _ in found}
-        done = self.searched_topics() | self.filed_topics() | {mail_topic(qid) for qid in self.answers}
-        for topic in self.prescribed_topics():
-            if topic not in asked and topic not in done:
-                subject = self.subjects.get(topic)
-                ask(f"search:{topic}", f"For {self.reference}: the {topic.replace('_', ' ')} records"
-                                       + (f" (subject {subject})" if subject else "") + ", searched once now even "
-                                       "though no position names one of their keys yet: file every hit for exactly "
-                                       f"{self.reference} (several with file_each). {self.mail_ask(topic)} This closes "
-                                       "by itself once you searched the subject word or filed such a record; answer "
-                                       "absent only if the inbox and the archive hold none.")
+                                                  f"{condition.fx_key} ({condition.currency}, material {material.number}).")
         return found
-
-    def mail_ask(self, topic: str) -> str:
-        return f"{self.mail_where(topic)} {self.mail_search(topic)}."
 
     def answer(self, question: str, status: str, note: str, agent: str | None = None) -> str:
         """An agent closes a question: its evidence is complete, or the thing does not exist."""
-        open_now = dict(self.questions())
-        open_ids = set(open_now)
+        open_ids = {qid for qid, _ in self.questions()}
         if question not in open_ids:
             return f'"{question}" is not an open question'
         if status not in ("complete", "absent"):
@@ -1172,132 +770,54 @@ class CaseFile:
             return "facts from documents you filed are still being extracted; wait for them, then answer"
         if question == "clarifications" and status == "complete" and not self.clarifications:
             return "no Q&A answers have been extracted yet; reopen the Q&A evidence, file it as clarifications, and wait for the extraction result"
-        if question.startswith("candidates:"):
-            facts = self.inputs()
-            answers = active_clarifications(facts.clarifications, self.scenario)
-            needs, _ = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
-            need = needs.get(question.split(":", 1)[1])
-            group = [m for m in facts.materials if need and need.catalogue_group
-                     and same_text(m.catalogue_group, need.catalogue_group)]
-            unknown = [m.number for m in group
-                       if m.active is None or None in (m.bore_mm, m.stroke_mm, m.pressure_bar, m.mounting)]
-            if status == "complete":
-                if not group:
-                    return "no catalogue candidates are on file yet: continue the ERP search, or answer absent only after an exhaustive search returned none"
-                if unknown:
-                    return ("the technical data or sales status of " + ", ".join(unknown)
-                            + " is not on file yet: open and file every candidate before completing the audit")
-            if status == "absent" and group:
-                return ("catalogue candidates are already on file: open and file every candidate's technical data, "
-                        "then complete the audit (or use the material question if none qualifies)")
         if question.startswith("material:") and status == "absent":
             facts = self.inputs()
             answers = active_clarifications(facts.clarifications, self.scenario)
             needs, _ = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
             need = needs.get(question.split(":", 1)[1])
-            group = [m for m in facts.materials if need and (same_text(m.catalogue_group, need.catalogue_group)
-                                                             if need.catalogue_group else m.bore_mm == need.bore_mm)]
+            group = [m for m in facts.materials if need and need.catalogue_group and same_text(m.catalogue_group, need.catalogue_group)]
             unknown = [m.number for m in group if m.active is None or None in (m.bore_mm, m.stroke_mm, m.pressure_bar, m.mounting)]
             if not group:
                 return "no material of that catalogue group is on file yet: search the group and file its materials first"
             if unknown:
                 return f"the technical data or status of {', '.join(unknown)} is not on file yet: file it before answering absent"
-        if status == "complete" and self._record_on_file(question, self.inputs().authorities) is False:
-            # run b462cdb3: the mail agent closed index:<code> as complete with only a decoy ("<ref>-A") filed; the
-            # metal index was then missing on every position and no open question said so
-            return self._record_refusal(question)
-        if status == "complete" and question.split(":")[0] in ("positions", "revision", "requirements", "material", "data"):
-            # with what is still missing: run dafda06b's agent answered "requirements complete" with 4 of 5 never
-            # filed, was told only to file "the missing evidence", and finished
-            return ("this question closes by itself once the facts are on file; file the missing evidence instead. "
-                    f"Still missing: {open_now[question]}")
+        if status == "complete" and question.split(":")[0] in ("positions", "revision", "requirements", "reserve", "material", "data"):
+            return "this question closes by itself once the facts are on file; file the missing evidence instead"
         self.answers[question] = (status, note)
         self._bump()
         return f"question {question} closed as {status}"
 
-    def status(self, sections: set[str] | frozenset[str] | None = None) -> str:
-        """What is on file, short enough to head every agent turn. `sections` (of STATUS_SECTIONS) limits it to the
-        parts an agent's questions concern (`status_sections`); the one-line header is always there. None: all."""
-        def wanted(section: str) -> bool:
-            return sections is None or section in sections
-
-        lines = [f"Tender {self.reference}, scenario date {self.scenario.isoformat()}, mailbox {self.mailbox or 'unknown'}."]
-        if sections is not None and not sections:
-            return lines[0]
+    def status(self) -> str:
+        """What is on file, short enough to head every agent turn."""
         facts = self.inputs()
         answers = active_clarifications(facts.clarifications, self.scenario)
         needs, _ = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
-        if wanted("positions"):
-            quantities, _ = final_quantities(facts.positions, answers, needs)
-            assigned, fees = merged_assignments(answers)
-            for p in facts.positions:
-                keys = ", ".join(f"{kind} {key}" for kind, key in assigned.get(p.position, {}).items())
-                lines.append(f"Position {p.position}: tender quantity {p.quantity}{' sets' if p.is_set else ''}, final "
-                             f"{quantities.get(p.position, '?')} pieces, requirement {p.requirement_ref}" + (f"; {keys}" if keys else ""))
-        if wanted("qa"):
-            lines.append(f"Q&A answers on file: {', '.join(sorted(self.clarifications)) or 'none'}.")
-        if wanted("spec"):
-            lines.append(f"Specification: current revision {facts.governing or 'unknown'}; revisions on file: "
-                         + (", ".join(f"{key} {row.get('status')}" for key, row in self.revisions.items()) or "none") + ".")
-        if wanted("requirements"):
-            for ref, need in sorted(needs.items()):
-                lines.append(f"Requirement {ref}: bore {need.bore_mm}, stroke {need.stroke_mm}{' usable travel' if need.usable_travel else ''}, "
-                             f"{need.pressure_bar} bar, {need.mounting}, certification {need.certification or 'none'}, group {need.catalogue_group}")
-        if wanted("materials"):
-            for m in facts.materials:
-                valid = [c for c in m.conditions if c.valid_on(self.scenario)]
-                lines.append(f"Material {m.number}: {'active' if m.active else 'NOT active' if m.active is False else 'status ?'}, group "
-                             f"{m.catalogue_group}, {m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification}; "
-                             f"stock {m.stock}, lead {m.stock_lead_weeks}/{m.production_lead_weeks} wk, carton {m.carton_size}, "
-                             f"index {m.index_code}, conditions on file {len(m.conditions)} ({len(valid)} valid on the scenario date"
-                             + (f", {valid[0].currency}" + (f" {valid[0].fx_key}" if valid[0].fx_key else "") if valid else "") + ")")
-        if wanted("authorities"):
-            a = facts.authorities
-            lines.append("Authorized mail records: discount "
-                         + ("none on file" if a.discount_percent is None else f"{a.discount_percent} %" + (f" if order value >= {a.discount_min_order}" if a.discount_min_order else ""))
-                         + "; " + "; ".join(f"{name}: {', '.join(sorted(store)) or '-'}" for name, store in (
-                             ("condition groups", a.clauses), ("tariffs", a.tariffs), ("commitments", a.commitments), ("pools", a.pools),
-                             ("bonus plans", a.bonus), ("FX", a.fx), ("indices", a.index_rates), ("reserves", a.reserves))))
-        return "\n".join(lines)
-
-    def task_card(self, intro: str = "", sites: dict[str, str] | None = None, mail: bool = False,
-                  standing: str = "", site_note: str = "") -> str:
-        """What an investigator needs of the brief to navigate, built from the context the model read from it at
-        the start (CONTEXT_SHAPE) instead of the whole brief: the bid rules are applied by code to what is filed.
-        `intro` is the brief's own task paragraph (`brief_intro`), `sites` the role -> website id the context named,
-        `mail`: also the authorized subjects and senders (for the agent that searches the mailbox), `standing` the
-        agent's standing job by its website's role, `site_note` what the brief says about its website. Empty when the
-        context has no tender reference: then the caller falls back to the whole brief."""
-        if not self.reference:
-            return ""
-        lines = ["TASK CARD (taken from the task brief; the case file applies the brief's rules to what you file)",
-                 f"- Tender {self.reference}; scenario date {self.scenario.isoformat()}: records dated later do not "
-                 "count" + (f"; bidder {self.company}" if self.company else "") + ".",
-                 "- Which record counts (the exact tender reference, the authorized sender, the latest record not after "
-                 "the scenario date, the current revision, an active material) and all matching and arithmetic are "
-                 "decided by code from what you file. Your OPEN QUESTIONS say what to find and what qualifies."]
-        named = {"erp": "the ERP (materials, stock, price conditions)", "mail": "the webmail with the sales mailbox"}
-        roles = [f"{named.get(role, role)}: {site}" for role, site in (sites or {}).items() if site]
-        if roles:
-            lines.append("- Websites: " + "; ".join(roles) + ".")
-        if standing:
-            lines.append(f"- {standing} When your OPEN QUESTIONS are (none), work through this standing job before "
-                         "you finish.")
-        if site_note:
-            lines.append(f"- The brief on your website: {site_note}")
-        if mail:
-            pairs = []
-            for topic in TOPICS:
-                subject, sender = self.subjects.get(topic), self.senders.get(topic)
-                if subject or sender:
-                    pairs.append(f"{topic.replace('_', ' ')}: " + ", ".join(part for part in (
-                        f'subject "{subject}"' if subject else "", f"sender {sender}@<mailbox domain>" if sender else "") if part))
-            if pairs:
-                lines.append("- Authorized mail records (subject word and sender, by topic): " + "; ".join(pairs) + ".")
-            if self.mail_hint:
-                lines.append(f"- Mail search: {self.mail_hint}")
-        if intro:
-            lines.append("THE TASK, IN THE BRIEF'S WORDS\n" + intro.strip())
+        quantities, _ = final_quantities(facts.positions, answers, needs)
+        assigned, fees = merged_assignments(answers)
+        lines = [f"Tender {self.reference}, scenario date {self.scenario.isoformat()}, mailbox {self.mailbox or 'unknown'}."]
+        for p in facts.positions:
+            keys = ", ".join(f"{kind} {key}" for kind, key in assigned.get(p.position, {}).items())
+            lines.append(f"Position {p.position}: tender quantity {p.quantity}{' sets' if p.is_set else ''}, final "
+                         f"{quantities.get(p.position, '?')} pieces, requirement {p.requirement_ref}" + (f"; {keys}" if keys else ""))
+        lines.append(f"Q&A answers on file: {', '.join(sorted(self.clarifications)) or 'none'}.")
+        lines.append(f"Specification: current revision {facts.governing or 'unknown'}; revisions on file: "
+                     + (", ".join(f"{key} {row.get('status')}" for key, row in self.revisions.items()) or "none") + ".")
+        for ref, need in sorted(needs.items()):
+            lines.append(f"Requirement {ref}: bore {need.bore_mm}, stroke {need.stroke_mm}{' usable travel' if need.usable_travel else ''}, "
+                         f"{need.pressure_bar} bar, {need.mounting}, certification {need.certification or 'none'}, group {need.catalogue_group}")
+        for m in facts.materials:
+            valid = [c for c in m.conditions if c.valid_on(self.scenario)]
+            lines.append(f"Material {m.number}: {'active' if m.active else 'NOT active' if m.active is False else 'status ?'}, group "
+                         f"{m.catalogue_group}, {m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification}; "
+                         f"stock {m.stock}, lead {m.stock_lead_weeks}/{m.production_lead_weeks} wk, carton {m.carton_size}, "
+                         f"index {m.index_code}, conditions on file {len(m.conditions)} ({len(valid)} valid on the scenario date"
+                         + (f", {valid[0].currency}" + (f" {valid[0].fx_key}" if valid[0].fx_key else "") if valid else "") + ")")
+        a = facts.authorities
+        lines.append("Authorized mail records: discount "
+                     + ("none on file" if a.discount_percent is None else f"{a.discount_percent} %" + (f" if order value >= {a.discount_min_order}" if a.discount_min_order else ""))
+                     + "; " + "; ".join(f"{name}: {', '.join(sorted(store)) or '-'}" for name, store in (
+                         ("condition groups", a.clauses), ("tariffs", a.tariffs), ("commitments", a.commitments), ("pools", a.pools),
+                         ("bonus plans", a.bonus), ("FX", a.fx), ("indices", a.index_rates), ("reserves", a.reserves))))
         return "\n".join(lines)
 
     def dump(self) -> str:
@@ -1311,7 +831,15 @@ class CaseFile:
 
 
 async def read_context(brief: str) -> dict:
-    """The tender's identity and the brief's sender rules, read from the brief by the model."""
-    return await llm.chat_json([{"role": "system", "content": "You read a task brief and return facts from it as JSON."},
-                                {"role": "user", "content": f"{CONTEXT_SHAPE}\n\nTASK BRIEF\n{brief}"}],
-                               think=True, max_tokens=3000, label="context")
+    """The tender's identity and the brief's sender rules, read from the brief by the model. Without reasoning
+    first (#4): every agent waits for this call, and with reasoning it took 8-22 s (runs a176359f, 99f03f3f,
+    20e3c020) for facts the brief states plainly. Asked again with reasoning when the reference, the date or a
+    sender rule is missing."""
+    messages = [{"role": "system", "content": "You read a task brief and return facts from it as JSON."},
+                {"role": "user", "content": f"{CONTEXT_SHAPE}\n\nTASK BRIEF\n{brief}"}]
+    context = await llm.chat_json(messages, think=False, max_tokens=1500, label="context")
+    senders = context.get("authorized_senders") if isinstance(context, dict) else None
+    if (_text(context.get("tender_reference")) and parse_when(context.get("scenario_date"))
+            and isinstance(senders, dict) and _text(senders.get("discount_approval"))):
+        return context
+    return await llm.chat_json(messages, think=True, max_tokens=1500, label="context")

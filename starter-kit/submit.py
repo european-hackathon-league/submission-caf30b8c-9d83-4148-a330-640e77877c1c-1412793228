@@ -9,22 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import time
 from decimal import Decimal
 
-import llm
 import sanity
 from browser_env import Tab
-from calculator import NO_CERTIFICATE, Bid
+from calculator import Bid
 from preflight import Report, check as check_review
-from worker import ACTIONS_HELP, CONTROL, Agent, brief_for
+from worker import ACTIONS_HELP, Agent
 
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
 MAIL_BUDGET = 120  # seconds one request to the mailbox may take
 CLERK_STEPS, COURIER_STEPS = 120, 25
-TURNS_RESERVE = 25  # clerk turns kept for leaving out what is not entered, signing and submitting (run 15a3aaf9)
 # The clerk's hint when it goes in circles (run d3ca14df: 95 turns of "fill the position, add it, empty again" until
 # its step cap, never signed). The brief's rule 9: every bid form lets a position be left out explicitly, and a
 # signed bid with one position left out keeps the others' points; an unsigned one scores nothing.
@@ -50,30 +47,14 @@ UNPROVEN_REFUSALS = 2
 # Entering a bid is reading a form and copying values: without the model's long reasoning a turn takes about half
 # the time, and the reply's "thought" still leaves it room to check a conversion.
 CLERK_THINKS, COURIER_THINKS = False, False
-
-# The clerk needs the brief's part on how to submit, not its bid rules (the bid sheet carries their result): the
-# sections whose heading names the submission, plus the rule lines on leaving positions out. A brief without such a
-# heading is kept whole (credentials removed either way). CONTEXT_GATES=0 brings back the whole brief.
-SUBMISSION_HEADING = re.compile(r"(?im)^(#{1,6})[^\n]*(?:submission|abgabe|einreichung)[^\n]*$")
-OMIT_RULE = re.compile(r"(?i)partial submission|teilabgabe|teilpunkte|\bomit|auslass|weglass")
-
-
-def clerk_brief(brief: str) -> str:
-    text = brief_for(brief)
-    if os.environ.get("CONTEXT_GATES", "1").strip() == "0":
-        return text
-    spans: list[tuple[int, int]] = []
-    for heading in SUBMISSION_HEADING.finditer(text):
-        if any(start <= heading.start() < end for start, end in spans):
-            continue  # a sub-heading of a section already taken
-        level = len(heading.group(1))
-        after = re.compile(rf"(?m)^#{{1,{level}}}\s").search(text, heading.end())
-        spans.append((heading.start(), after.start() if after else len(text)))
-    if not spans:
-        return text
-    taken = "\n\n".join(text[start:end].strip() for start, end in spans)
-    rules = [line.strip() for line in text.splitlines() if OMIT_RULE.search(line) and line.strip() not in taken]
-    return taken + ("\n\nRules on leaving positions out:\n" + "\n".join(rules) if rules else "")
+# enter_positions: the model writes the steps of ONE position once, with bid-sheet placeholders, and code repeats
+# them for every position the form asks for. Scored run a176359f: 25 of the clerk's 35 turns (~100 s) went on five
+# positions, one configurator choice per turn, though a chained "steps" action had worked on the first one.
+PLACEHOLDER = re.compile(r"\{(\w+)\}")
+POSITION_VALUES = ("position", "material_number", "quantity", "unit_price", "lead_time_weeks", "base_unit_price",
+                   "surcharge_per_unit", "packaging_per_unit", "rebate_total")
+MATERIAL_VALUES = ("bore_mm", "stroke_mm", "pressure_bar", "mounting", "certification")
+TEMPLATE_STEPS = 40  # steps in one position's template
 
 CLERK = """You are the bid clerk of a manufacturer's sales engineering team. Your colleagues have researched a
 public tender and a calculator has priced it: the BID SHEET below is the final result. You work the tender portal
@@ -103,21 +84,17 @@ Reading the bid sheet
 - "omitted_positions" could not be priced. Never invent values for them: use the form's explicit way of leaving
   a position out, if it has one.
 - Save turns: once you have seen how one step of the form works (which fields, which button applies a choice or
-  moves on), do a whole step, for example one position with all its choices and amounts, in one "steps" action,
-  using the labels exactly as the page shows them. If it stops part-way, read the page and carry on from there.
-  This includes a configurator where each choice must be applied before the next one appears: put every choice
-  and its apply button, in order, into the same "steps" action, then the amounts and the button that moves on.
-  You know every value from the bid; you do not need to see each list first.
-- Enter the first position with one "steps" action: every choice with its apply button, all amounts and the
-  control that moves on to the next position. When the form moves on, code enters the remaining positions with
-  the same steps and their own values from the bid sheet, and tells you what it entered.
-- If that did not happen (the report says so), enter the next position yourself, then let code enter the others:
-  {{"do": "fill_positions", "done": ["<position you entered>"], "template": [<the steps that worked for it, every
-  value replaced by a placeholder>]}}. Placeholders are the bid sheet's names in braces: {{quantity}},
-  {{unit_price|de}} (decimal comma), {{lead_time_weeks}}, {{material_number}}, {{bore_mm}}, {{stroke_mm}},
-  {{mounting}}, {{certification|none=<the form's option for no certificate>}} and so on; end the template with
-  the control that moves on to the next position. It enters every further position the form shows, each with its
-  own values, and stops where the form does not accept one: then finish that position yourself.
+  moves on), do a whole step in one "steps" action, using the labels exactly as the page shows them. If it stops
+  part-way, read the page and carry on from there. You know every value from the bid; you do not need to see each
+  list first.
+- POSITIONS: enter the FIRST position the form asks for yourself, with "steps" actions, and read the result: learn
+  which choices exist (e.g. how the form names "no certificate") and which control SAVES a position and moves on to
+  the next one. A control that only adds another, empty line ("add position") does not save the one you filled;
+  pressing it can put the form out of step. Once the first position is saved and the form shows the next one,
+  enter ALL remaining positions with ONE enter_positions action (described below) whose template repeats exactly
+  the steps that worked, with placeholders for the values, ending with that saving control. Code repeats it for
+  each position the form asks for, in the form's own order. The form may start with any position and use its own
+  order: enter the one it shows; do not go back to look for the lowest number first.
 - A position is entered once. When the form saves it, it may list it, show a short confirmation and empty its
   fields for a further line: then go on with the control that moves to the next position or step, and do not
   enter the same position again.
@@ -129,6 +106,22 @@ One more action:
       get the signing code (TAN) the portal sends by mail. Ask only after you have triggered the code in the
       portal, and pass on what you know about it (the tender reference, that you requested it just now, anything
       the portal displayed about it): the mailbox also holds older codes that no longer work.
+  {{"do": "enter_positions", "decimal": ",", "steps": [{{"field": "<label>", "value": "{{bore_mm}}"}},
+      {{"press": "<apply button>"}}, {{"field": "<label>", "value": "{{certification}}", "if_null": "<the option for none>"}},
+      {{"press": "<apply button>"}}, {{"field": "<label>", "value": "{{material_number}}"}},
+      {{"field": "<label>", "value": "{{quantity}}"}}, {{"field": "<label>", "value": "{{unit_price}}"}},
+      {{"press": "<button that saves the position and moves on>"}}]}}
+      Enters the bid sheet's positions with one template, written like a "steps" chain with the labels exactly as the
+      page shows them. A value may hold placeholders of a position's bid-sheet values: {{position}},
+      {{material_number}}, {{quantity}}, {{unit_price}}, {{lead_time_weeks}}, {{base_unit_price}},
+      {{surcharge_per_unit}}, {{packaging_per_unit}}, {{rebate_total}}, {{bore_mm}}, {{stroke_mm}}, {{pressure_bar}},
+      {{mounting}}, {{certification}}. "decimal" is the decimal sign the form's amount fields take. A placeholder whose
+      value is null leaves that step out, unless the step says what the form takes instead ("if_null", e.g. the
+      option for "no certificate"). Without "positions", every position the form shows is entered one after the
+      other until it shows none that is not entered yet; a template that chooses {{position}} itself goes through the
+      bid sheet in order. "positions": ["<position>"] enters just those. It stops at the first step that does not
+      work and says where; then read the page, fix that, and call it again (the template is remembered: {{"do":
+      "enter_positions"}} goes on with the positions not entered yet).
   {{"do": "check_submission"}}
       Read the current review page and produce a no-model checklist of visible errors, unfilled required controls,
       tender reference, offered positions and total. Run this immediately before the irreversible final step.
@@ -178,222 +171,12 @@ How to work
   block marked "not sent", that say nothing about the message itself: a code mail in the inbox from the portal is a
   received message even if such a section inside it says otherwise. When several code mails match, the one with the
   highest request or sequence number is the newest; take its code without waiting for a "better" one.
-- Dates in the mailbox may not match your sense of "now". If the newest matching code mail looks old by its date,
-  still open it and answer with its code (unless it is one of the answers you already gave): an empty answer is
-  worse than a code the portal may reject.
 - Lists can be paged, sorted either way and split over folders, and new mail may only show after a reload. If the
   message is not there yet, reload and look again a few times.
 - Log in again if the webmail asks.
 - Finish with done and put ONLY the value asked for in "answer": a code exactly as written, nothing around it.
   If you cannot find it, finish with done without "answer" and say in "summary" what you saw instead.
 """
-
-
-PLACEHOLDER = re.compile(r"\{(\w+)(?:\|([^}]*))?\}")
-CERTIFICATE_LABEL = re.compile(r"certif|zertif|certyfik", re.I)
-
-
-def no_certificate(value) -> bool:
-    """A certification value that means "none required", however it is written (calculator.NO_CERTIFICATE)."""
-    if value is None:
-        return True
-    return re.sub(r"\s+", " ", str(value).strip().lower()).strip(" .—–") in NO_CERTIFICATE
-
-
-def _line_values(line: dict, drop: tuple[str, ...] = ("material",)) -> dict:
-    """A bid-sheet line's own values and its material's, with a "no certificate" written as text read as null: the
-    form has a word of its own for it, which the template carries ({certification|none=<word>})."""
-    values = {**(line.get("material") or {}), **{k: v for k, v in line.items() if k not in drop}}
-    if "certification" in values and no_certificate(values["certification"]):
-        values["certification"] = None
-    return values
-
-
-def fill_template(template: list, line: dict) -> list:
-    """One position's steps from the template the clerk wrote after entering a position by hand (fill_positions): every
-    {name} becomes that bid-sheet line's value (its own fields and its material's), "{name|de}" with a decimal comma,
-    "{name|none=<text>}" with <text> when the value is null. A field step whose value is null and has no none= text
-    is left out: an unknown value leaves its field empty, as the bid sheet says."""
-    values = _line_values(line)
-    steps = []
-    for step in template:
-        if not isinstance(step, dict):
-            continue
-        if "press" in step:
-            steps.append({"press": PLACEHOLDER.sub(lambda m: str(values.get(m.group(1), m.group(0))), str(step["press"]))})
-            continue
-        raw, skip = step.get("value", ""), False
-
-        def put(match):
-            nonlocal skip
-            name, option = match.group(1), match.group(2) or ""
-            if name not in values:
-                return match.group(0)
-            value = values[name]
-            if value is None:
-                if option.startswith("none="):
-                    return option[len("none="):]
-                skip = True
-                return ""
-            text = str(value)
-            return text.replace(".", ",") if option == "de" else text
-
-        value = PLACEHOLDER.sub(put, raw) if isinstance(raw, str) else raw
-        if not skip:
-            steps.append({**step, "value": value})
-    return steps
-
-
-def as_steps(action: dict, page: str) -> list:
-    """A browser action as label-addressed steps (for the automatic form replay): a choice or a field by the label
-    its id has on the page it was taken on, a click by its control's label, a steps action as it is."""
-    do = action.get("do")
-    if do == "steps":
-        return [step for step in action.get("steps") or [] if isinstance(step, dict)]
-    aid = str(action.get("id", "")).strip("[] ")
-    label = next((m.group(3) for m in CONTROL.finditer(page) if m.group(1) == aid), None)
-    if not label:
-        return []
-    if do == "click":
-        return [{"press": label}]
-    if do == "fill":
-        return [{"field": label, "value": str(action.get("text", ""))}]
-    if do in ("select", "set"):
-        return [{"field": label, "value": action.get("value")}]
-    return []
-
-
-def _number_forms(value) -> set[str]:
-    """How a bid-sheet value may have been typed: as it is, with a decimal comma, with German thousands separators."""
-    text = str(value)
-    forms = {text}
-    try:
-        number = Decimal(text)
-    except Exception:  # noqa: BLE001  not a number
-        return forms
-    if "." in text:
-        forms.add(text.replace(".", ","))
-        forms.add(f"{number:,.2f}".replace(",", " ").replace(".", ",").replace(" ", "."))
-    return forms
-
-
-def templatize(steps: list, line: dict) -> tuple[list, list[tuple[int, str, list[str]]]]:
-    """The template of one entered position (automatic form replay): every field value that equals one of this
-    position's bid-sheet values becomes its placeholder ({quantity}, {unit_price|de}, ...). The one value the sheet
-    does not have, typed for a position whose certification is null, is the form's word for "no certificate".
-    Returns the template and the ambiguous fields (index, label, candidate placeholders): a value that equals two
-    fields (0.00 for surcharge and rebate) is not guessed here (resolve_template asks the model)."""
-    values = _line_values(line, drop=("material", "position"))
-    forms: dict[str, set[str]] = {}
-    for key, value in values.items():
-        if value is None:
-            continue
-        for form in _number_forms(value):
-            forms.setdefault(form.strip().lower(), set()).add("{" + key + ("|de" if "," in form else "") + "}")
-    template, ambiguous, unmatched = [], [], []
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        value = step.get("value")
-        if "press" in step or not isinstance(value, str):
-            template.append(step)
-            continue
-        found = sorted(forms.get(value.strip().lower(), set()))
-        keys = {h.replace("|de", "") for h in found}
-        if len(keys) > 1:
-            ambiguous.append((len(template), str(step.get("field", "")), found))
-            template.append(step)
-        elif keys:
-            template.append({**step, "value": found[0]})
-        else:
-            unmatched.append(len(template))
-            template.append(step)
-    if "certification" in values and values["certification"] is None:
-        # The form's word for "no certificate" must stay a placeholder: learned literally, a position that needs a
-        # certificate was replayed with "no certificate" (runs faa828e4, 6d30dbd4, 74e84e70). The field is the one
-        # labelled as a certificate, else the one whose value says "none", else the only value the sheet lacks.
-        labelled = [i for i in unmatched if CERTIFICATE_LABEL.search(str(template[i].get("field", "")))]
-        saying_none = [i for i in unmatched if no_certificate(template[i]["value"])]
-        chosen = next((group for group in (labelled, saying_none, unmatched) if len(group) == 1), None)
-        if chosen:
-            index = chosen[0]
-            template[index] = {**template[index], "value": "{certification|none=" + template[index]["value"] + "}"}
-    return template, ambiguous
-
-
-async def resolve_template(template: list, ambiguous: list[tuple[int, str, list[str]]]) -> list | None:
-    """Fields whose value matched several bid-sheet fields: the model names, from the field's label, which one it
-    takes (one short call). None when it cannot."""
-    if not ambiguous:
-        return template
-    fields = [{"field": label, "candidates": candidates} for _, label, candidates in ambiguous]
-    reply = await llm.chat_json([
-        {"role": "system", "content": "You map bid form fields to bid sheet values. Answer only with JSON."},
-        {"role": "user", "content": "For each form field, choose the one bid sheet placeholder it takes, from its "
-                                    "candidates, by what the field's label says. Answer "
-                                    '{"choices": [{"field": "<label>", "placeholder": "<one candidate>"}]}\n'
-                                    + json.dumps(fields, ensure_ascii=False)}], think=False, max_tokens=800,
-        label="submit:template")
-    chosen = {str(c.get("field")): str(c.get("placeholder")) for c in reply.get("choices") or [] if isinstance(c, dict)}
-    resolved = list(template)
-    for index, label, candidates in ambiguous:
-        if chosen.get(label) not in candidates:
-            return None
-        resolved[index] = {**resolved[index], "value": chosen[label]}
-    return resolved
-
-
-def shown_position(page: str, candidates: list[str], every: list[str] | None = None) -> str | None:
-    """The bid position the form shows now, if it is one of `candidates`: the position named in a heading, else the
-    one named first next to the word "Position"/"Pos.". A heading naming a position that is not a candidate (already
-    entered) means none: never another position's values into that one's form. A number inside another word (an
-    option like "M-2") is not a position."""
-    every = every or candidates
-
-    def first(text: str, labelled: bool) -> str | None:
-        prefix = r"(?:position|pos\.?)\s*" if labelled else r"(?<![\w.\-/])"
-        found = [(m.start(), p) for p in every
-                 for m in [re.search(prefix + rf"{re.escape(p)}(?![\w.\-/])", text, re.I)] if m]
-        return min(found)[1] if found else None
-    headings = "\n".join(line for line in page.splitlines() if line.lstrip().startswith("#") or "title:" in line)
-    named = first(headings, True) or first(page, True) or first(headings, False)  # "Schritt 3 von 8" is no position
-    return named if named in candidates else None
-
-
-# Words a portal uses to confirm that a bid came in, as stems in a few languages (a line of the page after the final
-# click that was not on the review page before it).
-RECEIPT = re.compile(r"eingegangen|eingereicht|erhalten|empfangen|bestätig|bestaetig|quittung|eingangs|vielen dank|"
-                     r"erfolgreich|received|receipt|confirm|submitted|success|thank you|reçu|confirmé|potwierdz|"
-                     r"otrzyma|złożon|przyjęt", re.I)
-# On the same step a sign page may add "please confirm with the code": there only words of a receipt count.
-RECEIVED = re.compile(r"eingegangen|eingereicht|empfangen|quittung|eingangs|vielen dank|received|receipt|thank you|"
-                      r"reçu|otrzyma|złożon|przyjęt", re.I)
-ALERT = "(alert)"
-
-
-def _step_of(page: str) -> tuple:
-    """Where a page is in a form: its url and title lines and its headings."""
-    lines = page.splitlines()
-    return (tuple(l.strip() for l in lines[:3] if l.startswith(("url:", "title:"))),
-            tuple(l.strip() for l in lines if l.lstrip().startswith("#")))
-
-
-def unconfirmed(before: str, after: str) -> str | None:
-    """Why the page after the final click does not confirm the submission, None when it does. Confirmed is a page
-    that left the review/sign step without an alert, or that shows new receipt wording (not in an alert line); with
-    an alert on it, only a new step that also shows receipt wording counts (an alert may be a rejected code)."""
-    old = {l.strip() for l in before.splitlines()}
-    receipt = [l.strip() for l in after.splitlines()
-               if l.strip() not in old and ALERT not in l and RECEIPT.search(l)]
-    moved = _step_of(before) != _step_of(after)
-    alerts = [l.strip() for l in after.splitlines() if ALERT in l]
-    if not moved:
-        receipt = [l for l in receipt if RECEIVED.search(l)]
-    if (moved and receipt) or (not alerts and (moved or receipt)):
-        return None
-    headings = _step_of(after)[1]
-    shown = "; ".join(alerts[:3]) or ("still on " + " / ".join(headings[:2]) if headings else "the page did not change")
-    return shown[:300]
 
 
 def _amount(value: Decimal | None) -> str | None:
@@ -421,6 +204,74 @@ def bid_sheet(bid: Bid) -> dict:
             "positions": positions, "omitted_positions": list(bid.omitted), "total_net": _amount(bid.total_net)}
 
 
+def position_values(entry: dict) -> dict:
+    """One bid-sheet position as the values a template's placeholders stand for."""
+    values = {name: entry.get(name) for name in POSITION_VALUES}
+    material = entry.get("material") or {}
+    values.update({name: material.get(name) for name in MATERIAL_VALUES})
+    return values
+
+
+def _notation(value, decimal: str) -> str:
+    """A sheet value as the form takes it: only the decimal sign of a number changes, never the value."""
+    text = str(value)
+    if decimal == "," and re.fullmatch(r"-?\d+\.\d+", text):
+        return text.replace(".", ",")
+    return text
+
+
+def fill_template(template: list, values: dict, decimal: str = ".") -> tuple[list[dict], str | None]:
+    """The steps of one position: placeholders replaced by its values. (steps, None), or ([], why) when the template
+    names a value the bid sheet does not have."""
+    steps = []
+    for step in template[:TEMPLATE_STEPS]:
+        if not isinstance(step, dict):
+            continue
+        if "press" in step:
+            steps.append({"press": str(step["press"])})
+            continue
+        if "field" not in step:
+            continue
+        raw = step.get("value", "")
+        names = PLACEHOLDER.findall(raw) if isinstance(raw, str) else []
+        unknown = [name for name in names if name not in values]
+        if unknown:
+            return [], (f'the template uses {", ".join("{" + n + "}" for n in unknown)}, which the bid sheet does not '
+                        f'have; the placeholders are {", ".join("{" + n + "}" for n in values)}')
+        if names and any(values[name] is None for name in names):
+            if "if_null" not in step:
+                continue  # the sheet has no value: the field stays empty
+            value = step["if_null"]
+        elif names:
+            value = PLACEHOLDER.sub(lambda m: _notation(values[m.group(1)], decimal), raw)
+        else:
+            value = raw  # a fixed value: a box to tick, a choice the form needs for every position
+        steps.append({"field": str(step["field"]), "value": value})
+    return steps, None
+
+
+def shown_positions(page: str, candidates: list[str]) -> list[str]:
+    """The candidate position numbers the page mentions. A bare short number ("1") counts only next to a word for
+    position; a structured one ("01.04") wherever it stands alone."""
+    found = []
+    for position in candidates:
+        number = re.escape(str(position))
+        if re.fullmatch(r"\d{1,2}", str(position)):
+            pattern = rf"(?i)\bpos(?:ition)?\.?\s*(?:nr\.?\s*)?{number}(?![\w.,])"
+        else:
+            pattern = rf"(?<![\w.]){number}(?![\w]|\.\d)"
+        if re.search(pattern, page):
+            found.append(position)
+    return found
+
+
+def heading_positions(page: str, candidates: list[str]) -> list[str]:
+    """Of `candidates`, those named in a heading line of the page: the position a form step is about."""
+    headings = "\n".join(line for line in page.splitlines() if line.lstrip().startswith("#")
+                         or line.lower().startswith("title:"))
+    return shown_positions(headings, candidates)
+
+
 async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: dict, brief: str,
                      deadline: float) -> dict:
     """Have an agent enter, sign and submit `bid` in the tender portal before `deadline` (a time.time() value).
@@ -430,9 +281,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     """
     reference = str(context.get("tender_reference") or bid.tender_reference)
     guard = sanity.TypingGuard() if sanity.enabled("typing_guard") else None
-    codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
-    # set by finalize: how often the binding submit button was pressed, the page after it, whether the portal confirmed
-    final = {"clicked": 0, "page": "", "confirmed": False}
+    codes: list[str] = []
+    final = {"clicked": False, "page": ""}  # set by finalize once the binding submit button was pressed  # what the mailbox handed out so far: a used code must not be handed out again
     review: Report | None = None
     held_back = 0  # final steps refused because the page did not show the bid
 
@@ -453,7 +303,6 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     # The control that requested the signing code: clicking it again before a code came back voids the code that is
     # on its way (sandbox run a85be021 lost its signature this way). Recorded when the clerk first asks the mailbox.
     code_request = {"label": None, "searches": 0, "last_click": None}
-    replayed: set[str] = set()  # positions fill_positions entered
     omits = {"count": 0, "hints": 0}  # omit controls pressed, and the clerk's circle hints at the last one
 
     def _label_of(aid) -> str | None:
@@ -465,14 +314,6 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         veto = guard(action) if guard is not None else None
         if veto:
             return veto
-        pressed = None
-        if action.get("do") == "click":  # its label on the page as last read (the ids of this turn)
-            pressed = next((m.group(3) for m in CONTROL.finditer(str(getattr(tender_tab, "document", "") or ""))
-                            if m.group(1) == str(action.get("id", "")).strip("[] ")), None)
-        if pressed and refused.get(pressed, 0) >= 2:
-            # Run 63f3be2e: "Position hinzufügen" pressed 10 times, refused each time ("not possible in this step").
-            return (f'blocked: the form refused "{pressed}" twice in this step. It is not the way on here: use the '
-                    "control that saves this step and moves on to the next one.")
         # Bounded: after two searches that found nothing the code may really be lost, and a fresh request is allowed.
         label = _label_of(action.get("id")) if action.get("do") == "click" else None
         if (sanity.enabled("single_code_request") and label and code_request["label"]
@@ -488,7 +329,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             priced_here = any(re.search(rf"(?<![\w.]){re.escape(str(line.position))}(?![\w.])", page)
                               for line in bid.lines)
             if (priced_here and omits["count"] >= len(bid.omitted) + 1 and not stuck_again
-                    and deadline - time.time() >= WRAP_UP and not turns_short()):
+                    and deadline - time.time() >= WRAP_UP):
                 return (f'blocked: "{label}" would leave out a position that has its values on the bid sheet. Only '
                         "the one position you were stuck on may be left out. Enter this position with its values "
                         "from the bid sheet (all choices with their apply buttons and the amounts in one \"steps\" "
@@ -536,38 +377,80 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             guard.allow(answer)  # read from the mailbox during the run: the clerk may type it
         return f'the mailbox colleague answers: "{answer}"' + (f' ({outcome["summary"]})' if outcome.get("summary") else "")
 
-    async def fill_positions(action: dict) -> str:
-        """Replays the template of a position the clerk entered by hand for every position the form shows next, with
-        that position's values from the bid sheet (runs 15a3aaf9, 49f7be51: 35-100 clerk turns on the positions, one
-        choice or field per turn, and loops). Stops at the first chain that does not run cleanly."""
-        template = action.get("template") or []
-        if not isinstance(template, list) or not template:
-            return 'fill_positions needs "template": the steps of one position, with {placeholders} for its values'
-        lines = {str(line["position"]): line for line in sheet["positions"]}
-        replayed.update(str(p).strip() for p in action.get("done") or [])  # entered by hand: never again
-        report = []
-        for _ in range(len(lines)):
-            if time.time() > deadline - WRAP_UP:
-                report.append("stopped: time is short, sign what is entered")
-                break
-            remaining = [p for p in lines if p not in replayed]
-            position = shown_position(await tender_tab.observe(), remaining, list(lines))
-            if position is None:
-                report.append("no further bid position is shown on the form: continue with the form's next step")
-                break
-            result = await clerk._steps(fill_template(template, lines[position]))
-            report.append(f"position {position}: {result[:300]}")
-            # Progress is the form moving on to another position (a notice after the last press may be a
-            # confirmation); still on the same position means it was not accepted.
-            now = shown_position(await tender_tab.observe(), list(lines), list(lines))
-            if now == position or not (result.startswith("ran all") or "page says" in result):
-                report.append("stopped there: the form did not move on; read the page and finish this position yourself")
-                break
-            replayed.add(position)
-        return "fill_positions:\n" + "\n".join(report)
+    entered: list[str] = []  # positions enter_positions has entered, in the form's order
+    remembered = {"steps": None, "decimal": "."}
 
-    async def look(page: str | None = None) -> Report:
-        report = check_review(await tender_tab.observe() if page is None else page, bid, reference)
+    async def enter_positions(action: dict) -> str:
+        template = action.get("steps") or remembered["steps"]
+        if not isinstance(template, list) or not template:
+            return 'enter_positions needs "steps": the template of one position, with placeholders like {unit_price}'
+        decimal = str(action.get("decimal") or remembered["decimal"] or ".")
+        remembered.update(steps=template, decimal=decimal)
+        sheet_positions = {str(entry["position"]): entry for entry in sheet["positions"]}
+        wanted = action.get("positions")
+        if isinstance(wanted, str):
+            wanted = [wanted] if wanted.strip().lower() not in ("all", "") else None
+        if wanted:
+            unknown = [str(p) for p in wanted if str(p) not in sheet_positions]
+            if unknown:
+                return (f"enter_positions: {', '.join(unknown)} is not a position of the bid sheet; its positions are "
+                        f"{', '.join(sheet_positions)}")
+            todo = [str(p) for p in wanted]
+        else:
+            todo = [p for p in sheet_positions if p not in entered]
+        chooses = any("{position}" in str(step.get("value", "")) for step in template if isinstance(step, dict))
+        report: list[str] = []
+        while todo and deadline - time.time() > WRAP_UP:
+            if chooses or len(todo) == 1 and wanted:
+                position = todo[0]  # the template picks the position itself, or the model named it
+            else:
+                page = await tender_tab.observe()
+                shown = shown_positions(page, todo)
+                if len(shown) > 1:
+                    shown = heading_positions(page, shown) or shown
+                if not shown:
+                    report.append("the form shows no further position of the bid sheet (this action did not enter "
+                                  f"{', '.join(todo)}: a position you entered yourself and the form saved is done, do "
+                                  "not enter it again)")
+                    break
+                if len(shown) > 1:
+                    report.append(f"the page shows several positions not entered yet ({', '.join(shown)}): call "
+                                  'enter_positions with "positions": ["<the one the form asks for now>"]')
+                    break
+                position = shown[0]
+            steps, problem = fill_template(template, position_values(sheet_positions[position]), decimal)
+            if problem:
+                report.append(problem)
+                break
+            result = await clerk._steps(steps, errors_only=True, limit=len(steps))
+            if not result.startswith("ran all"):
+                report.append(f"position {position} stopped: {result[:700]}")
+                break
+            # Test run 10def205: the template's last press did not save the position, the form showed it again
+            # with empty fields, and it was counted as entered. A position still named in the form's heading after
+            # the last press was not saved.
+            after = await tender_tab.observe()
+            if heading_positions(after, [position]):
+                report.append(f"position {position} was NOT saved: after the template's last press the form still "
+                              f"shows position {position}. Read the page: fix what it reports, or press the control "
+                              "that saves this position and moves on (not one that adds another, empty line), and "
+                              "use that control as the template's last step")
+                break
+            entered.append(position)
+            todo.remove(position)
+            report.append(f"position {position} entered ({len(steps)} steps)")
+            print(f"[submit] enter_positions: position {position} entered", flush=True)
+        if todo and deadline - time.time() <= WRAP_UP:
+            report.append("time is short: no further positions entered")
+        left = [p for p in sheet_positions if p not in entered]
+        return ("enter_positions: " + "; ".join(report) + f". Entered by enter_positions so far: "
+                f"{', '.join(entered) or 'none'}"
+                + (f"; not entered by enter_positions: {', '.join(left)}" if left
+                   else "; every position of the bid sheet is entered")
+                + ". Check the page now.")
+
+    async def look() -> Report:
+        report = check_review(await tender_tab.observe(), bid, reference)
         if report.unproven and not sanity.enabled("summary_check"):  # switched off: missing evidence only warns
             report = Report(not report.blockers, report.blockers, report.warnings + report.unproven, report.checks)
         return report
@@ -580,8 +463,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     async def finalize(action: dict) -> str:
         nonlocal review, held_back
         # Navigation, expiry and server validation can invalidate an earlier review, so inspect it again.
-        before = await tender_tab.observe()
-        review = await look(before)
+        review = await look()
         if review.blockers:
             return review.text() + "\nFinal submission was not pressed."
         if review.unproven:
@@ -595,62 +477,32 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                   + ("time is short" if short else f"held back {held_back} time(s)") + "): "
                   + " | ".join(review.unproven), flush=True)
         result = await tender_tab.click(action.get("id"))
-        final["clicked"] += 1
         # Submitting ends the run and with it the run token: every later model call fails ("expired/unknown run
         # token" in sandbox runs 6da03229, 8184b178, 3c3568bb). So the confirmation is read here, in code, and the
-        # clerk stops without another model turn once the portal confirms.
-        missing = None
-        for attempt in range(2):  # a confirmation may render a moment after the click
-            try:
-                final["page"] = await asyncio.wait_for(tender_tab.observe(), 20)
-            except Exception:  # noqa: BLE001  unreadable: judged as before, the click counts
-                final["page"] = ""
-            missing = unconfirmed(before, final["page"]) if final["page"] else None
-            if missing is None or attempt or deadline - time.time() < 10:
-                break
-            await asyncio.sleep(2)
-        if missing is not None:
-            # Eval run_8be6fb149758cee5: the click was taken as a submission while the page still showed the review
-            # and sign step (no code had been entered); the clerk stopped with nothing submitted. Not confirmed, it
-            # keeps working while time remains.
-            print(f"[submit] final step pressed, no confirmation: {missing}", flush=True)
-            return (f"{result}\nThe portal did NOT confirm the submission: {missing}. The bid is not submitted yet. "
-                    "Read the page: enter a valid signing code (request a fresh one if the code was rejected or is "
-                    "used up, and fetch it with ask_mail), then check_submission and finalize again.")
-        final["confirmed"] = True
+        # clerk stops without another model turn.
+        try:
+            final["page"] = await asyncio.wait_for(tender_tab.observe(), 20)
+        except Exception:  # noqa: BLE001
+            final["page"] = ""
+        final["clicked"] = True
         clerk.deadline = 0  # ends the agent loop before its next model call
         return result
 
     def heading() -> str:
         left = int(deadline - time.time())
         text = f"YOUR JOB: enter, sign and submit the bid for tender {reference}, then read the confirmation."
-        # The position the form shows now, with its own values (run 63f3be2e: the clerk assumed the form starts with
-        # the first position of the sheet and typed another position's values into it).
-        every = [str(line["position"]) for line in sheet["positions"]]
-        shown = shown_position(str(getattr(tender_tab, "document", "") or ""), every, every)
-        if shown is not None:
-            line = next(l for l in sheet["positions"] if str(l["position"]) == shown)
-            text += (f"\nTHE FORM SHOWS POSITION {shown} NOW. Its values from the bid sheet: "
-                     + json.dumps(line, ensure_ascii=False))
         if codes:
             text += "\nCodes from the mailbox so far, oldest first: " + ", ".join(codes)
+        if entered:
+            text += "\nPositions entered with enter_positions so far: " + ", ".join(entered)
         if left < WRAP_UP:
             text += (f"\nTIME IS SHORT ({left} s). Enter no further positions: leave out the ones not entered yet if "
                      "the form allows it, go straight to the signature, fetch the code and submit what is entered.")
-        elif turns_short():
-            # Run 15a3aaf9: a four-step cycle on one position (choose, fill, add, "not possible", continue, "complete
-            # the configuration") ran the clerk into its step cap before the time ran short: unsigned, 0 points.
-            text += (f"\nYOUR TURNS ARE RUNNING OUT ({CLERK_STEPS - clerk.steps} left). Enter no further positions: "
-                     "leave out the position you are on and the ones not entered yet if the form allows it, go "
-                     "straight to the signature, fetch the code and submit what is entered.")
         return text
-
-    def turns_short() -> bool:
-        return CLERK_STEPS - clerk.steps <= TURNS_RESERVE
 
     bidder = {"company": context.get("company"), "vat_id": context.get("vat_id"), "email": context.get("email")}
     sheet = bid_sheet(bid)
-    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=clerk_brief(brief), reference=reference,
+    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
                           sheet=json.dumps(sheet, ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
     if sanity.enabled("no_guessed_mailbox") and not bidder.get("email"):
@@ -663,69 +515,15 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         guard.allow(reference)
     clerk = Agent("submit", tender_tab, system, heading,
                   extra={"ask_mail": ask_mail, "check_submission": check_submission, "finalize": finalize,
-                         "fill_positions": fill_positions}, deadline=deadline,
+                         "enter_positions": enter_positions}, deadline=deadline,
                   max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=clerk_guard,
                   circle_hint=CLERK_CIRCLE_HINT)
-    chains: dict[str, list] = {}  # steps the clerk ran while the form showed each position (automatic replay)
-    refused: dict[str, int] = {}  # button label -> times the form answered it with a new alert, in this step
-    form_step = {"now": None}  # (page title, shown position) of the step the refusals belong to
-
-    async def on_action(action: dict, before: str, result: str) -> str | None:
-        """Automatic form replay, whatever the clerk's style (run 472732d2: single selects and clicks, no steps):
-        every action taken while the form shows a bid position is recorded as a label-addressed step; when the form
-        moves on to another bid position, that position's steps become the template (templatize; the model resolves
-        only ambiguous fields) and code enters every further position (fill_positions)."""
-        every = [str(line["position"]) for line in sheet["positions"]]
-        # the page after a click (this runs before the worker's own re-read); other actions do not change the step
-        after = await tender_tab.observe() if action.get("do") == "click" else str(getattr(tender_tab, "document", "") or "")
-
-        def step_of(page: str) -> tuple:
-            heading = next((l.strip() for l in page.splitlines() if l.lstrip().startswith("#")), "")
-            return heading, shown_position(page, every, every)
-
-        step_before, step_now = step_of(before), step_of(after)
-        if step_before != form_step["now"]:  # refusals belong to the step they happened in
-            form_step["now"] = step_before
-            refused.clear()
-        if action.get("do") == "click" and step_now == step_before and "(alert)" in after:
-            # pressed, still on the same step, and the page announces an alert: the form refused it
-            label = next((s["press"] for s in as_steps(action, before) if "press" in s), None)
-            if label:
-                refused[label] = refused.get(label, 0) + 1
-        elif step_now != step_before:  # the form moved on
-            form_step["now"] = step_now
-            refused.clear()
-        position = shown_position(before, [p for p in every if p not in replayed], every)
-        if position is None or time.time() > deadline - WRAP_UP:
-            return None
-        chains.setdefault(position, []).extend(as_steps(action, before))
-        if action.get("do") not in ("click", "steps"):
-            return None
-        following = [p for p in every if p not in replayed and p != position]
-        if shown_position(await tender_tab.observe(), following, every) is None:
-            return None  # still on this position (or past the positions): nothing to replay yet
-        replayed.add(position)
-        template, ambiguous = templatize(chains[position], next(l for l in sheet["positions"] if str(l["position"]) == position))
-        template = await resolve_template(template, ambiguous)
-        if template is None:
-            return ("The next positions are not entered automatically (a field could not be matched to the bid "
-                    "sheet): enter the next one, then use fill_positions.")
-        line = json.dumps(template, ensure_ascii=False)[:400]
-        print(f"[submit] automatic form replay after position {position}: {line}", flush=True)
-        report = await fill_positions({"template": template})
-        return (f"Position {position} is in. The following positions were entered automatically with the same steps "
-                "and their own values:\n" + report)
-
-    clerk.on_action = on_action
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
-    if final["confirmed"]:  # submitted: the confirmation was read in code, no model turn after the click
+    if final["clicked"]:  # submitted: the confirmation was read in code, no model turn after the click
         receipt = receipt or final["page"][:1500]
         return {"submitted": True, "receipt": receipt, "notes": notes or "submitted; confirmation read without the model"}
-    if final["clicked"]:
-        notes = (notes + " " if notes else "") + (f"final submit pressed {final['clicked']} time(s), the portal "
-                                                  "showed no confirmation after it")
     if not outcome.get("done"):
         notes = (notes + " " if notes else "") + f"stopped after {outcome.get('steps', 0)} steps without a confirmation"
     return {"submitted": bool(outcome.get("done") and receipt), "receipt": receipt, "notes": notes}
