@@ -166,6 +166,14 @@ class Team:
         return hold
 
 
+# Which kinds of evidence answer which open question (by the part of its id before ":"): an agent that filed one of
+# these kinds works on that question, and is not let go while it is open (before_done in `investigator`).
+QUESTION_KINDS = {"positions": ("positions",), "revision": ("revisions",), "requirements": ("requirements",),
+                  "clarifications": ("clarifications",), "material": ("material",),
+                  "data": ("material", "price_conditions")}
+DONE_REFUSALS = 2  # refused dones per question and agent
+DONE_GATE_SECONDS = 90  # investigation time that must be left for a done to be refused
+
 FILE_EACH_LIMIT = 12  # records per file_each action
 FILE_EACH_SECONDS = 150  # and seconds for all of them; the agent continues from the list afterwards
 
@@ -429,19 +437,54 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     walks = WALKS.setdefault(name, WalkRecorder())  # what was learned outlives a restart; the walk in progress not
     walks.walk = None
 
+    filed_kinds: set[str] = set()  # kinds of evidence this agent filed: the questions it works on (before_done)
+    refused: dict[str, int] = {}  # question -> times a done was refused over it
+
+    def filing(kind: str, text: str, source: str) -> str:
+        res = case.file(kind, text, source, name)
+        if res.startswith("filed"):
+            filed_kinds.add(kind)
+        return res
+
     async def keep(action: dict) -> str:
         document, source = agent.document()
         kind = str(action.get("kind", ""))
-        res = case.file(kind, document, source, name)
+        pages = [] if agent.held else agent.trail_pages()
+        paged = len(pages)
+        res = filing(kind, document, source)
         if kind in SHAPES:
             walks.kept(kind, agent.held is not None)
         if res.startswith("this document is already filed"):
             res += "; do not file this same page again — check OPEN QUESTIONS for what is missing on another page, or finish with done"
+        if res.startswith(("filed", "this document is already filed")):
+            agent.forget_trail(filed=pages or [agent.tab.document])
+            if paged > 1:
+                res = (f"you paged through this document in place, so the {paged} pages you read of it since your last "
+                       "keep were filed together: " + res)
         return res
 
     async def file_each_action(action: dict) -> str:
-        return await file_each(tab, action, lambda kind, text, source: case.file(kind, text, source, name),
-                               agent.coverage.saw, deadline, agent.page_seen)
+        return await file_each(tab, action, filing, agent.coverage.saw, deadline, agent.page_seen)
+
+    async def before_done(action: dict) -> str | None:
+        """A done while a question this agent filed evidence for is still open: the agent is told what is missing
+        instead of going idle (sandbox run dafda06b: the customer-portal agent read 4 requirements in its thoughts,
+        filed one page, and finished; the requirements question stayed open and nobody came back to it). At most
+        DONE_REFUSALS times per question, never while its own documents are being read or near the deadline."""
+        if not sanity.enabled("done_gate") or case.pending_for(name) or deadline - time.time() < DONE_GATE_SECONDS:
+            return None
+        mine = [(qid, text) for qid, text in questions_for_site(name, case.questions())
+                if filed_kinds & set(QUESTION_KINDS.get(qid.split(":", 1)[0], ())) and refused.get(qid, 0) < DONE_REFUSALS]
+        if not mine:
+            return None
+        for qid, _ in mine:
+            refused[qid] = refused.get(qid, 0) + 1
+        return ("not finished: you filed evidence for these questions and they are still open:\n"
+                + "\n".join(f"- [{qid}] {text}" for qid, text in mine)
+                + "\nThe case file does not have what they name yet. If you read it on pages you did not file, go back "
+                  "to them and file them: a paged document with collect on its next-page control, or page through it "
+                  "and keep (every page of it you read since your last keep is filed with it). If it is on another "
+                  "website, or does not exist, answer it absent where the question allows that, or say so with done again.")
 
     async def answer(action: dict) -> str:
         # A completion action can arrive in the same turn as `keep`. Wait for this agent's own
@@ -458,6 +501,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
     # Navigation runs without the model's thinking: about twice as fast. The facts themselves are read by the
     # extraction calls in casefile.py, which keep thinking on. AGENT_THINK=1 turns it back on for comparison.
     agent = Agent(name, tab, system, briefing, extra={"keep": keep, "file_each": file_each_action, "answer": answer}, deadline=deadline,
+                  before_done=before_done,
                   max_steps=int(os.environ.get("AGENT_MAX_STEPS", "150")), idle=team.hook(name),
                   think=os.environ.get("AGENT_THINK") == "1",
                   circle_hint="You are going in circles: the same thought keeps coming back without progress. If a "
