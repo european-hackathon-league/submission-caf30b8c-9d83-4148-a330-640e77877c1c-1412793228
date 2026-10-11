@@ -18,6 +18,7 @@ import llm
 import sanity
 from browser_env import NOT_KEPT, PAGE_BREAK, Tab, without_ids
 from coverage import Ledger
+from gates import Gates
 
 ACTIONS_HELP = """Reply with ONE JSON object: {"thought": "<one or two short sentences: what the page tells you and what you do next>", "actions": [ ... ]}.
 The actions run in order. Once an action loads another page the rest of the list is dropped, because the element
@@ -198,6 +199,13 @@ class Agent:
         self.trail_source = ""
         self.trail_filed: set[str] = set()  # pages at trail_source that a keep filed already
         self.coverage = Ledger()  # what this agent really opened, typed and followed (coverage.py)
+        # Context gates (gates.py): off unless the caller sets `gates`. The escalated turn uses `full_system` and
+        # `full_briefing` when set (the whole brief and case file); `stop_when()` returning a reason ends the agent's
+        # work before the next model call (the run's token budget, agent.py).
+        self.gates = Gates(enabled=False)
+        self.full_system: str | None = None
+        self.full_briefing: Callable[[], str] | None = None
+        self.stop_when: Callable[[], str | None] | None = None
         self.steps = 0
         self.started = time.time()
 
@@ -262,7 +270,8 @@ class Agent:
 
     def _messages(self, user: str) -> list[dict]:
         messages = [{"role": "system", "content": self.system}]
-        kept = self.turns[-HISTORY_TURNS:] if HISTORY_TURNS > 0 else self.turns
+        limit = self.gates.history(HISTORY_TURNS)
+        kept = self.turns[-limit:] if limit > 0 else self.turns
         older = self.turns[:len(self.turns) - len(kept)]
         earlier = ""
         if older:  # one line per older turn: what the agent thought, so it still knows what it tried
@@ -284,6 +293,8 @@ class Agent:
                 "the page as it really is, think about why your steps did not work, and choose a different way. If "
                 "what you need is not reachable from here, finish with done.")
         messages = self._messages(text)
+        if self.full_system:  # the full context for this one turn (gates.py, gate 2)
+            messages[0]["content"] = self.full_system
         image = await self.tab.screenshot() if hasattr(self.tab, "screenshot") else None
         if image:
             messages[-1]["content"] = [{"type": "text", "text": text},
@@ -461,6 +472,15 @@ class Agent:
         seen_signatures: dict[str, int] = {}
         stuck = 0  # page reads and navigations in a row that timed out or failed: the tab may be broken
         while self.steps < self.max_steps and time.time() < self.deadline:
+            reason = self.stop_when() if self.stop_when else None
+            if reason:  # finished without another model call; an idle agent may still be woken (and stopped again)
+                self.log(f"finishing: {reason}")
+                outcome.update(summary=reason, answer=None)
+                news = await self.idle("done") if self.idle else None
+                if news is None:
+                    outcome["done"] = True
+                    break
+                continue
             self.steps += 1
             clock = time.time()
             try:
@@ -472,10 +492,13 @@ class Agent:
             self.coverage.saw(page)
             self.page_seen = page  # the page the model answers to: its ids and link targets (file_each)
             self.read_page()
+            turn_url = self.tab.page.url
+            self.gates.start_turn(page)
             results.extend(self.tab.take_events())
             done_text = "\n".join(f"{n}. {text}" for n, text in enumerate(results, 1)) or "(none yet)"
             left = int(self.deadline - time.time())
-            user = (f"{self.briefing()}\n\nTIME LEFT: {left} s\n\nRESULTS OF YOUR LAST ACTIONS\n{done_text}\n\n"
+            briefing = self.full_briefing if self._escalate and self.full_briefing else self.briefing
+            user = (f"{briefing()}\n\nTIME LEFT: {left} s\n\nRESULTS OF YOUR LAST ACTIONS\n{done_text}\n\n"
                     f"CURRENT PAGE\n{page}")
             read_s = time.time() - clock
             clock = time.time()
@@ -527,6 +550,7 @@ class Agent:
                     if self._circle_hints == 2 and (self.idle or strict) and self.escalations < ESCALATION_LIMIT \
                             and sanity.enabled("escalation"):
                         self._escalate = True
+                        self.gates.escalate("going in circles")
             if circling:
                 final = await llm.chat_json(self._messages(
                     user + "\n\nYou have reached the same conclusion several times in a row. Stop checking and finish "
@@ -550,6 +574,7 @@ class Agent:
             # page.  A form may keep its URL while legitimately changing state.
             signature = action_fingerprint(actions, page) + state_fingerprint(page)
             seen_signatures[signature] = seen_signatures.get(signature, 0) + 1
+            same_turn = signature == last_signature or (len(recent) >= 2 and bool(recent[-1]) and recent[-1] == recent[-2])
             repeats = repeats + 1 if signature == last_signature else max(0, seen_signatures[signature] - 1)
             last_signature = signature
 
@@ -647,6 +672,9 @@ class Agent:
                 except Exception as error:  # noqa: BLE001
                     results.append(f"replacing the stuck tab failed: {str(error)[:150]}")
                 self.held = None
+            if self.gates.end_turn(actions, results, url_before=turn_url, url_after=self.tab.page.url, repeated=same_turn,
+                                   can_escalate=self.escalations < ESCALATION_LIMIT and sanity.enabled("escalation")):
+                self._escalate = True
             self.log(f"(read {read_s:.1f}s, model {model_s:.1f}s, act {time.time() - clock:.1f}s) {thought} | "
                      f"{json.dumps(actions, ensure_ascii=False)[:400]} | " + " ; ".join(r[:160] for r in results))
             if repeats >= 2:

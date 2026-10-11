@@ -143,6 +143,125 @@ MAIL_QUESTION_TOPICS = {"discount": "discount_approval", "condition_group": "con
                         "setup_pool": "setup_pools", "project_bonus": "project_bonus", "index": "price_indices",
                         "fx": "fx_fixing", "reserve": "tech_release"}
 
+# The parts of the case-file status (CaseFile.status) and which of them an open question concerns, by its id prefix:
+# an investigator is shown the lines its own questions are about, not every other agent's facts. A question of a
+# kind not listed here gets all of them.
+STATUS_SECTIONS = ("positions", "qa", "spec", "requirements", "materials", "authorities")
+QUESTION_SECTIONS = {"positions": ("positions",), "clarifications": ("qa", "positions"), "mailbox": (),
+                     "revision": ("spec",), "requirements": ("spec", "requirements"),
+                     "reserve": ("requirements", "authorities"), "material": ("requirements", "materials"),
+                     "data": ("materials",)}
+# ... and which of them a kind of evidence an agent filed fills (so that it sees what its filings brought)
+KIND_SECTIONS = {"positions": ("positions",), "clarifications": ("qa", "positions"), "revisions": ("spec",),
+                 "requirements": ("spec", "requirements"), "material": ("materials",),
+                 "price_conditions": ("materials",), "mail": ("authorities",)}
+
+
+def status_sections(question_ids, kinds=()) -> set[str]:
+    """The case-file sections that open questions (by id) and filed kinds of evidence concern."""
+    wanted: set[str] = set()
+    for qid in question_ids:
+        prefix = str(qid).split(":", 1)[0]
+        if prefix in QUESTION_SECTIONS:
+            wanted.update(QUESTION_SECTIONS[prefix])
+        elif prefix in MAIL_QUESTION_TOPICS:
+            wanted.add("authorities")
+        else:
+            wanted.update(STATUS_SECTIONS)
+    for kind in kinds:
+        wanted.update(KIND_SECTIONS.get(kind, ()))
+    return wanted
+
+
+# Where a brief's rules begin: a heading, a "Rules" line or a first numbered rule.
+_RULES_START = re.compile(r"(?i)^\s*(?:#{1,6}\s|(?:\*\*)?(?:bid\s+)?(?:rules|regeln)\b|1[.)]\s)")
+INTRO_LIMIT = 2000  # characters of the brief's task paragraph an investigator's task card may carry
+
+
+def brief_intro(brief: str, limit: int = INTRO_LIMIT) -> str:
+    """The brief's own task paragraph: what comes before its first rules heading (a leading title line is kept).
+    Empty when the brief has no such boundary, or when what comes before it is longer than `limit` and cannot be
+    cut at a paragraph."""
+    lines = brief.strip().splitlines()
+    start = 1 if lines and lines[0].lstrip().startswith("#") else 0
+    end = next((index for index in range(start, len(lines)) if _RULES_START.match(lines[index])), None)
+    if end is None:
+        return ""
+    text = "\n".join(lines[:end]).strip()
+    if len(text) > limit:
+        cut = text.rfind("\n\n", 0, limit)
+        text = text[:cut].strip() if cut > 0 else ""
+    return text if text and text != lines[0].strip() else ""
+
+
+# Words by which a rule of the brief concerns an open question, by the question's id prefix. Mail-record questions
+# also take MAIL_WORDS. Generic business words (English with German stems), no scenario values.
+QUESTION_WORDS = {
+    "positions": ("position", "quantit", "menge"),
+    "clarifications": ("clarification", "q&a", "withdraw", "amendment", "änderung", "zurückzieh"),
+    "mailbox": ("mailbox", "webmail"),
+    "revision": ("revision", "specification", "spezifikation"),
+    "requirements": ("requirement", "specification", "revision", "per set", "anforderung"),
+    "reserve": ("reserve", "usable", "travel", "release", "freigabe"),
+    "material": ("material", "catalog", "katalog", "erp", "blocked", "active"),
+    "data": ("stock", "lead time", "price condition", "scale", "carton", "mass", "index", "lager"),
+    "discount": ("discount", "approv", "rabatt"),
+    "condition_group": ("condition", "clause", "kondition"),
+    "packaging_tariff": ("packaging", "tariff", "verpackung"),
+    "delivery_commitment": ("delivery", "commitment", "liefer"),
+    "setup_pool": ("setup", "pool", "rüst"),
+    "project_bonus": ("bonus",),
+    "index": ("index", "indices", "surcharge"),
+    "fx": ("currency", "fx", "exchange", "devisen"),
+}
+MAIL_WORDS = ("sender", "subject", "mail search", "authoriz")
+RULES_LIMIT = 2500  # characters of brief rules a gate-1 turn may carry
+_NOT_FOR_SEARCH = re.compile(r"(?i)\bscor(?:e|ing)\b|\bpoints\b")  # how the bid is scored: no help in finding records
+_UNIT_START = re.compile(r"^\s*(?:[-*•]\s|\d+[.)]\s)")
+
+
+def brief_rules(brief: str, question_ids, limit: int = RULES_LIMIT) -> str:
+    """The rules of `brief` (its bullet and numbered lines and paragraphs) that name a topic of the open questions,
+    most relevant first up to `limit` characters, in the brief's order. The whole brief when it has no such structure
+    to cut (fewer than three rules); empty when no rule concerns the questions."""
+    units: list[str] = []
+    current: list[str] = []
+    for line in brief.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            if current:
+                units.append("\n".join(current))
+            current = []
+        elif _UNIT_START.match(line) and current:
+            units.append("\n".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        units.append("\n".join(current))
+    if len(units) < 3:
+        return brief.strip()
+    words: set[str] = set()
+    for qid in question_ids:
+        prefix = str(qid).split(":", 1)[0]
+        words.update(QUESTION_WORDS.get(prefix, ()))
+        if prefix in MAIL_QUESTION_TOPICS:
+            words.update(MAIL_WORDS)
+    scored = []
+    for index, unit in enumerate(units):
+        if _NOT_FOR_SEARCH.search(unit):
+            continue
+        text = unit.casefold()
+        score = sum(1 for word in words if re.search(r"(?<![\w])" + re.escape(word), text))
+        if score:
+            scored.append((-score, index, unit))
+    chosen, size = [], 0
+    for _, index, unit in sorted(scored):
+        if size + len(unit) <= limit:
+            chosen.append((index, unit.strip()))
+            size += len(unit) + 1
+    return "\n".join(unit for _, unit in sorted(chosen))
+
+
 _PIECE_UNITS = {"stk", "stk.", "st", "st.", "stück", "stueck", "pc", "pcs", "pcs.", "piece", "pieces", "ea", "each", "einzelstück", "einzelstueck"}
 _SET_UNITS = {"satz", "sätze", "saetze", "set", "sets", "kit", "kits"}
 
@@ -859,37 +978,82 @@ class CaseFile:
         self._bump()
         return f"question {question} closed as {status}"
 
-    def status(self) -> str:
-        """What is on file, short enough to head every agent turn."""
+    def status(self, sections: set[str] | frozenset[str] | None = None) -> str:
+        """What is on file, short enough to head every agent turn. `sections` (of STATUS_SECTIONS) limits it to the
+        parts an agent's questions concern (`status_sections`); the one-line header is always there. None: all."""
+        def wanted(section: str) -> bool:
+            return sections is None or section in sections
+
+        lines = [f"Tender {self.reference}, scenario date {self.scenario.isoformat()}, mailbox {self.mailbox or 'unknown'}."]
+        if sections is not None and not sections:
+            return lines[0]
         facts = self.inputs()
         answers = active_clarifications(facts.clarifications, self.scenario)
         needs, _ = resolve_requirements(facts.requirements, facts.governing, answers, facts.authorities)
-        quantities, _ = final_quantities(facts.positions, answers, needs)
-        assigned, fees = merged_assignments(answers)
-        lines = [f"Tender {self.reference}, scenario date {self.scenario.isoformat()}, mailbox {self.mailbox or 'unknown'}."]
-        for p in facts.positions:
-            keys = ", ".join(f"{kind} {key}" for kind, key in assigned.get(p.position, {}).items())
-            lines.append(f"Position {p.position}: tender quantity {p.quantity}{' sets' if p.is_set else ''}, final "
-                         f"{quantities.get(p.position, '?')} pieces, requirement {p.requirement_ref}" + (f"; {keys}" if keys else ""))
-        lines.append(f"Q&A answers on file: {', '.join(sorted(self.clarifications)) or 'none'}.")
-        lines.append(f"Specification: current revision {facts.governing or 'unknown'}; revisions on file: "
-                     + (", ".join(f"{key} {row.get('status')}" for key, row in self.revisions.items()) or "none") + ".")
-        for ref, need in sorted(needs.items()):
-            lines.append(f"Requirement {ref}: bore {need.bore_mm}, stroke {need.stroke_mm}{' usable travel' if need.usable_travel else ''}, "
-                         f"{need.pressure_bar} bar, {need.mounting}, certification {need.certification or 'none'}, group {need.catalogue_group}")
-        for m in facts.materials:
-            valid = [c for c in m.conditions if c.valid_on(self.scenario)]
-            lines.append(f"Material {m.number}: {'active' if m.active else 'NOT active' if m.active is False else 'status ?'}, group "
-                         f"{m.catalogue_group}, {m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification}; "
-                         f"stock {m.stock}, lead {m.stock_lead_weeks}/{m.production_lead_weeks} wk, carton {m.carton_size}, "
-                         f"index {m.index_code}, conditions on file {len(m.conditions)} ({len(valid)} valid on the scenario date"
-                         + (f", {valid[0].currency}" + (f" {valid[0].fx_key}" if valid[0].fx_key else "") if valid else "") + ")")
-        a = facts.authorities
-        lines.append("Authorized mail records: discount "
-                     + ("none on file" if a.discount_percent is None else f"{a.discount_percent} %" + (f" if order value >= {a.discount_min_order}" if a.discount_min_order else ""))
-                     + "; " + "; ".join(f"{name}: {', '.join(sorted(store)) or '-'}" for name, store in (
-                         ("condition groups", a.clauses), ("tariffs", a.tariffs), ("commitments", a.commitments), ("pools", a.pools),
-                         ("bonus plans", a.bonus), ("FX", a.fx), ("indices", a.index_rates), ("reserves", a.reserves))))
+        if wanted("positions"):
+            quantities, _ = final_quantities(facts.positions, answers, needs)
+            assigned, fees = merged_assignments(answers)
+            for p in facts.positions:
+                keys = ", ".join(f"{kind} {key}" for kind, key in assigned.get(p.position, {}).items())
+                lines.append(f"Position {p.position}: tender quantity {p.quantity}{' sets' if p.is_set else ''}, final "
+                             f"{quantities.get(p.position, '?')} pieces, requirement {p.requirement_ref}" + (f"; {keys}" if keys else ""))
+        if wanted("qa"):
+            lines.append(f"Q&A answers on file: {', '.join(sorted(self.clarifications)) or 'none'}.")
+        if wanted("spec"):
+            lines.append(f"Specification: current revision {facts.governing or 'unknown'}; revisions on file: "
+                         + (", ".join(f"{key} {row.get('status')}" for key, row in self.revisions.items()) or "none") + ".")
+        if wanted("requirements"):
+            for ref, need in sorted(needs.items()):
+                lines.append(f"Requirement {ref}: bore {need.bore_mm}, stroke {need.stroke_mm}{' usable travel' if need.usable_travel else ''}, "
+                             f"{need.pressure_bar} bar, {need.mounting}, certification {need.certification or 'none'}, group {need.catalogue_group}")
+        if wanted("materials"):
+            for m in facts.materials:
+                valid = [c for c in m.conditions if c.valid_on(self.scenario)]
+                lines.append(f"Material {m.number}: {'active' if m.active else 'NOT active' if m.active is False else 'status ?'}, group "
+                             f"{m.catalogue_group}, {m.bore_mm}/{m.stroke_mm} mm, {m.pressure_bar} bar, {m.mounting}, {m.certification}; "
+                             f"stock {m.stock}, lead {m.stock_lead_weeks}/{m.production_lead_weeks} wk, carton {m.carton_size}, "
+                             f"index {m.index_code}, conditions on file {len(m.conditions)} ({len(valid)} valid on the scenario date"
+                             + (f", {valid[0].currency}" + (f" {valid[0].fx_key}" if valid[0].fx_key else "") if valid else "") + ")")
+        if wanted("authorities"):
+            a = facts.authorities
+            lines.append("Authorized mail records: discount "
+                         + ("none on file" if a.discount_percent is None else f"{a.discount_percent} %" + (f" if order value >= {a.discount_min_order}" if a.discount_min_order else ""))
+                         + "; " + "; ".join(f"{name}: {', '.join(sorted(store)) or '-'}" for name, store in (
+                             ("condition groups", a.clauses), ("tariffs", a.tariffs), ("commitments", a.commitments), ("pools", a.pools),
+                             ("bonus plans", a.bonus), ("FX", a.fx), ("indices", a.index_rates), ("reserves", a.reserves))))
+        return "\n".join(lines)
+
+    def task_card(self, intro: str = "", sites: dict[str, str] | None = None, mail: bool = False) -> str:
+        """What an investigator needs of the brief to navigate, built from the context the model read from it at
+        the start (CONTEXT_SHAPE) instead of the whole brief: the bid rules are applied by code to what is filed.
+        `intro` is the brief's own task paragraph (`brief_intro`), `sites` the role -> website id the context named,
+        `mail`: also the authorized subjects and senders (for the agent that searches the mailbox). Empty when the
+        context has no tender reference: then the caller falls back to the whole brief."""
+        if not self.reference:
+            return ""
+        lines = ["TASK CARD (taken from the task brief; the case file applies the brief's rules to what you file)",
+                 f"- Tender {self.reference}; scenario date {self.scenario.isoformat()}: records dated later do not "
+                 "count" + (f"; bidder {self.company}" if self.company else "") + ".",
+                 "- Which record counts (the exact tender reference, the authorized sender, the latest record not after "
+                 "the scenario date, the current revision, an active material) and all matching and arithmetic are "
+                 "decided by code from what you file. Your OPEN QUESTIONS say what to find and what qualifies."]
+        named = {"erp": "the ERP (materials, stock, price conditions)", "mail": "the webmail with the sales mailbox"}
+        roles = [f"{named.get(role, role)}: {site}" for role, site in (sites or {}).items() if site]
+        if roles:
+            lines.append("- Websites: " + "; ".join(roles) + ".")
+        if mail:
+            pairs = []
+            for topic in TOPICS:
+                subject, sender = self.subjects.get(topic), self.senders.get(topic)
+                if subject or sender:
+                    pairs.append(f"{topic.replace('_', ' ')}: " + ", ".join(part for part in (
+                        f'subject "{subject}"' if subject else "", f"sender {sender}@<mailbox domain>" if sender else "") if part))
+            if pairs:
+                lines.append("- Authorized mail records (subject word and sender, by topic): " + "; ".join(pairs) + ".")
+            if self.mail_hint:
+                lines.append(f"- Mail search: {self.mail_hint}")
+        if intro:
+            lines.append("THE TASK, IN THE BRIEF'S WORDS\n" + intro.strip())
         return "\n".join(lines)
 
     def dump(self) -> str:
