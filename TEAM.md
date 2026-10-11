@@ -27,7 +27,7 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 11 Oct 2026,
 | Task | Owner | Status |
 |---|---|---|
 | Confirm the clerk fix dba5e72 in the sandbox (3 runs) | Maria | 🟨 running |
-| Page-text trimming (repeated menus, long lists) measured on local traces, then 2 sandbox runs | Maria | 🟨 local trace run going |
+| Trimming: measured on local traces, the old history (not the page text) is what fills ERP calls → history cap 41cfde5, 2 sandbox runs | Maria | 🟨 running |
 | Decide the final package: resubmit `maria/cost` with dba5e72 once confirmed (or let a promoted run replace it) | **Maria + Vamshidhar** | ⬜ needs the go |
 | Speed: agents start during the context call; ERP starts sooner | Maria | ⬜ |
 | Pitch: story of the architecture, the fair-play design, the cost × time work | Iga, Ravindra | ⬜ |
@@ -45,7 +45,7 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 11 Oct 2026,
 
 | # | What | Status (11 Oct) |
 |---|---|---|
-| 19 | **Page-text trimming** (ERP pages ~14k tokens per call) | 🟨 Maria, measuring on local traces |
+| 19 | **History trimming** (measured: ERP pages are small, ~4.3k characters; old history is half of each ERP call) | 🟨 Maria, `maria/cost` 41cfde5: last 10 turns kept, older ones one line each; 3 tests; loop replay unchanged 18/19; 2 sandbox runs going |
 | 18 | **Cost: one past page in full instead of two** (`FULL_TURNS`, `maria/cost` 9105e5e) + input tokens per agent in the run summary | ✅ $0.31 → **$0.16** at 100 (4876a0ad, promoted to sub_973a02b5). Brief guide tried and dropped (only 28% shorter, +12 s) |
 | 17 | **Clerk omit cascade / omit loop** (8a2e1426, 012496d3) | 🟨 fc54a43 (start the stuck position over, omit cap) → dba5e72 (neutral notice, omit allowance per circle); in test |
 | 10-16 | Stuck investigators, idle-wake, browser failover, escalation, `steps`, routing fallback | ✅ in the sandbox: `maria/escalation` scored 100 in 8 of 10 valid runs (both 0s were clerk loops, P1); fastest 6.3 min (9902e32b) |
@@ -161,6 +161,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 04:05 | run_9ac58b69 | Maria | `maria/cost` **41cfde5** (+ clerk fix dba5e72 + last 10 turns of history kept, older ones shrink to their thought) | running | | | | History cap, check 2 |
+| 04:03 | run_3bf52944 | Maria | `maria/cost` **41cfde5** (+ clerk fix dba5e72 + last 10 turns of history kept, older ones shrink to their thought) | running | | | | History cap, check 1. Local traces: ERP pages ~4.3k characters, but ERP calls ~15k tokens: mostly old history (85 ERP calls = 53% of input in a local run) |
+| 04:03 | run_8a46eb9c | Vamshidhar | package 0cca498f = main **d72deb8** (rerun of b3f1b38f) | running | | | | |
 | 03:58 | run_b3f1b38f | Vamshidhar | package 0cca498f = main **d72deb8** (ERP candidate audit) | **– (platform failure, doesn't count)** | | 3 min | 175 / $0.23 | Platform failure at 04:02 |
 | 03:35 | **sub_973a02b5 (SUBMISSION, promoted by the organisers)** | Organisers | test run 4876a0ad = `maria/cost` **9105e5e** (package 4c5ab3f4) | **100** | ✅ | 8.4 min | 184 / **$0.164** | **Now our final package** (latest passed submission). ⚠️ Same package as 012496d3, which scored 0 (clerk omit loop). Leaderboard 04:00 UTC: **#7**, $0.164, 8:21 |
 | 03:53 | run_608c82d7 | Maria | `maria/cost` **8e19c98** (= 9105e5e + clerk fix dba5e72) | **– (platform failure, doesn't count)** | | 8.7 min | 211 / $0.21 | Atira "The platform failed" at 04:02, same minute as bf29711e and b3f1b38f; not retried |
