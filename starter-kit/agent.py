@@ -420,6 +420,11 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         questions = questions_for_site(name, case.questions())
         news = case.take_news(name)
         text = f"CASE FILE\n{case.status()}\n\nOPEN QUESTIONS\n"
+        # The mailbox agent sees every record it still needs at once, with the brief's subject word and sender,
+        # so that it can plan its searches (sandbox runs 9ac58b69, 472732d2, 63f3be2e: 25-46 turns of guessing).
+        checklist = case.mail_checklist(questions) if site_role(name) == "mail" else ""
+        if checklist:
+            text += checklist + "\n\n"
         text += "\n".join(f"- [{qid}] {question}" for qid, question in questions) or "(none)"
         if news:
             text += "\n\nNEWS FROM YOUR FILED DOCUMENTS\n" + "\n".join(f"- {item}" for item in news)
@@ -594,7 +599,7 @@ async def solve(task: dict, playwright) -> dict | None:
     case = CaseFile(brief, context)
     print(f"Sanity checks on: {', '.join(sanity.active()) or 'none'}", flush=True)
     print(f"Context: tender {case.reference}, scenario {case.scenario.isoformat()}, company {case.company}, "
-          f"senders {case.senders}", flush=True)
+          f"senders {case.senders}, subjects {case.subjects}", flush=True)
 
     left = contract.seconds_left(task)
     budget = min(left, 20 * 60) if left != float("inf") else 20 * 60  # a scored run has 20 minutes
