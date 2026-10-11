@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import casefile  # noqa: E402
-from calculator import Material, Requirement, calculate_bid, match_material  # noqa: E402
+from calculator import Material, Requirement, calculate_bid, match_material, same_revision  # noqa: E402
 
 
 class AWorldWithFewerRules(unittest.TestCase):
@@ -50,6 +50,23 @@ class AWorldWithFewerRules(unittest.TestCase):
         case.merge("requirements", {"revision": "2", "requirements": [
             {"requirement_ref": "R-1", "bore_mm": 40, "stroke_mm": 250, "mounting": "Flansch"}]})
         self.assertEqual(case.governing_revision(), "2")
+
+    def test_revision_ids_that_differ_only_by_a_leading_word_are_the_same(self):
+        # eval variant B: revisions filed as "Revision 2", the requirements as "2": no requirement governed
+        self.assertTrue(same_revision("Revision 2", "2"))
+        self.assertTrue(same_revision("Rev. B", "b"))
+        self.assertTrue(same_revision("R-17", "R-17"))
+        self.assertFalse(same_revision("Revision 2", "3"))
+        self.assertFalse(same_revision("R-17", "17"))  # a prefix that is part of the id is kept
+        case = casefile.CaseFile("brief", {"tender_reference": "T-77", "scenario_date": "2030-05-01"})
+        case.merge("revisions", {"document": "SPEC-9", "revisions": [
+            {"revision": "Revision 1", "date": "2030-02-01", "status": "superseded"},
+            {"revision": "Revision 2", "date": "2030-03-01", "status": "current"}]})
+        case.merge("requirements", {"revision": "2", "requirements": [
+            {"requirement_ref": "R-1", "bore_mm": 40, "stroke_mm": 250, "mounting": "Flansch"}]})
+        case.merge("requirements", {"revision": "1", "requirements": [
+            {"requirement_ref": "R-1", "bore_mm": 40, "stroke_mm": 200, "mounting": "Flansch"}]})
+        self.assertEqual(case.inputs().requirements["R-1"].stroke_mm, 250)
 
     def test_change_notices_and_approval_registers_have_a_kind_to_be_read_with(self):
         self.assertIn("change or amendment", casefile.SHAPES["clarifications"])

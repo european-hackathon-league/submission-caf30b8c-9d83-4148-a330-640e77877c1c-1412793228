@@ -128,6 +128,15 @@ def same_text(a: str | None, b: str | None) -> bool:
     return norm(a) == norm(b)
 
 
+REVISION_WORDS = re.compile(r"^\s*(?:revision|rev|version|ver|ausgabe|stand|index|v)\b\.?\s*:?\s*", re.I)
+
+
+def same_revision(a: str | None, b: str | None) -> bool:
+    """Revision ids match when they differ only by a leading word: "Revision 2", "Rev. 2" and "2" are the same (eval
+    variant B: revisions were filed as "Revision 2", the requirements as "2", and no requirement governed)."""
+    return same_text(REVISION_WORDS.sub("", a or ""), REVISION_WORDS.sub("", b or ""))
+
+
 NO_CERTIFICATE = ("", "-", "keine", "kein", "ohne", "none", "no", "n/a", "na", "nicht gefordert", "keine gefordert",
                   "nicht erforderlich", "keine erforderlich", "entfällt")
 
@@ -313,7 +322,7 @@ def resolve_requirements(requirements: dict[str, Requirement], governing_revisio
     for answer in answers:  # oldest first, so the latest amendment wins per attribute
         for revision, ref, attribute, value in answer.amendments:
             need = resolved.get(ref)
-            if need is None or not governing_revision or not same_text(revision, governing_revision):
+            if need is None or not governing_revision or not same_revision(revision, governing_revision):
                 continue
             name = attribute.lower()
             number = parse_number(value, "de-DE")  # a dot in a German dimension groups thousands
@@ -327,9 +336,9 @@ def resolve_requirements(requirements: dict[str, Requirement], governing_revisio
             continue
         entry = authorities.reserves.get(need.reserve_key or "")
         if entry is None and not need.reserve_key:  # the release may name only the revision
-            bound = [e for e in authorities.reserves.values() if e[0] and same_text(e[0], governing_revision)]
+            bound = [e for e in authorities.reserves.values() if e[0] and same_revision(e[0], governing_revision)]
             entry = bound[0] if len(bound) == 1 else None
-        if entry is None or (entry[0] and governing_revision and not same_text(entry[0], governing_revision)):
+        if entry is None or (entry[0] and governing_revision and not same_revision(entry[0], governing_revision)):
             waiting[ref] = need.reserve_key or "the per-end reserve"
             continue
         need.stroke_mm += 2 * entry[1]
