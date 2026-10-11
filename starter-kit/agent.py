@@ -27,7 +27,7 @@ from calculator import calculate_bid
 import sanity
 import validate
 from casefile import SHAPES, CaseFile, read_context
-from worker import ACTIONS_HELP, CONTROL, Agent, find_control
+from worker import ACTIONS_HELP, ACTIONS_HELP_RESEARCH, CONTROL, Agent, brief_for, find_control
 
 RESTART_MIN_SECONDS = 120  # an unfinished agent is restarted only while this much investigation time is left
 
@@ -241,7 +241,8 @@ async def file_each(tab, action: dict, file, saw, deadline: float, seen: str = "
 
 def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent:
     name = tab.site_id
-    system = INVESTIGATOR.format(site=name, url=tab.base_url, brief=case.brief, actions=ACTIONS_HELP)
+    system = INVESTIGATOR.format(site=name, url=tab.base_url, actions=ACTIONS_HELP_RESEARCH,
+                                 brief=brief_for(case.brief, drop_sections=("submission", "abgabe", "einreichung")))
 
     def briefing() -> str:
         questions = questions_for_site(name, case.questions())
