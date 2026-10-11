@@ -61,8 +61,11 @@ Reading the page:
 """
 
 # The investigators' action list without the steps action (a form chain only the bid clerk needs): ~900 characters
-# less in every investigator call, and input tokens are most of a run's cost.
-ACTIONS_HELP_RESEARCH = (ACTIONS_HELP[:ACTIONS_HELP.index('  {"do": "steps"')]
+# less in every investigator call, and input tokens are most of a run's cost. Instead they get "path", a chain of
+# clicks only (Agent._path): two lines.
+PATH_HELP = ('  {"do": "path", "labels": ["<menu>", "<tab>", "<link>"]}  clicks up to 6 controls in order across page loads,\n'
+             '                                                   each found by its label (or a part) on the page as it then is\n')
+ACTIONS_HELP_RESEARCH = (ACTIONS_HELP[:ACTIONS_HELP.index('  {"do": "steps"')] + PATH_HELP
                          + ACTIONS_HELP[ACTIONS_HELP.index('  {"do": "done"'):])
 CREDENTIAL_LINE = re.compile(r"(?im)^[^\n]*\b(?:password|passwort|kennwort|username|benutzername)\b\s*:[^\n]*\n?")
 
@@ -102,9 +105,10 @@ def _thought(reply: str) -> str:
     except (ValueError, AttributeError):
         text = reply
     return " ".join(text.split())[:200] or "(no thought)"
-NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps"}
+NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps", "path"}
 TRAIL_PAGES = 12  # pages of one document read in place that a keep files together (Agent.trail_pages)
 STEPS_LIMIT, STEPS_TIMEOUT = 30, 240  # one "steps" action: at most this many steps, and seconds in all
+PATH_LIMIT, PATH_TIMEOUT = 6, 90  # one "path" action: at most this many clicks, and seconds in all
 ALERT = re.compile(r"\((?:alert|status)\)[^\n]*")  # a message the page announces to screen readers (Tab.observe)
 CONTROL = re.compile(r'\[(\d+)\] (?:\(in collapsed menu\) )?(select|input(?:\(\w+\))?|button|checkbox|radio|link|clickable|switch) "([^"]*)"([^\[]*)')
 
@@ -355,6 +359,53 @@ class Agent:
                 return f"ran {len(done)} of {len(steps)} steps: " + "; ".join(done) + f". Step {number} did not take; check it."
         return f"ran all {len(done)} steps: " + "; ".join(done)
 
+    async def _path(self, labels) -> str:
+        """Clicks a model-named chain of controls by label across page loads (the "path" action), so that navigation
+        the model already knows (a menu, a tab, a sub-page) costs one model turn instead of one per click. Run
+        63f3be2e: the ERP agent took 64 turns (151 s of model time) and the customer portal 54, mostly one click
+        each, the browser idle while the model thought. Every label is found again on the page as it then is; every
+        click passes the guard and the same bookkeeping as a click the model sends (coverage, trail, on_action). The
+        chain stops at the first label it cannot find unambiguously, a refused or failed click, or a message the page
+        announces, and says how far it got."""
+        labels = labels if isinstance(labels, list) else [labels]
+        labels = [" ".join(str(label).split()) for label in labels if isinstance(label, str) and label.strip()]
+        if not labels:
+            return 'path needs "labels": the labels of the controls to click, in order'
+        todo, done = labels[:PATH_LIMIT], []
+        cut = f" (only the first {PATH_LIMIT} of {len(labels)} labels run in one path)" if len(labels) > PATH_LIMIT else ""
+
+        def report(tail: str) -> str:
+            return (f"path: clicked {len(done)} of {len(todo)}" + (": " + " > ".join(done) if done else "") + cut
+                    + (f". {tail}" if tail else ""))
+
+        alerts_before: set[str] = set()
+        for number, label in enumerate(todo, start=1):
+            page = await asyncio.wait_for(self.tab.observe(), READ_TIMEOUT)
+            if number > 1:  # a page passed on the way: seen, and a page of the document when it was paged in place
+                self.coverage.saw(page)
+                self.read_page()
+                new = [a for a in ALERT.findall(page) if a not in alerts_before]
+                if new:
+                    return report(f'After "{done[-1]}" the page says: {" / ".join(new)[:300]}. Stopped there; read the '
+                                  "page as it is now.")
+            aid, why = find_control(page, label, ("link", "button", "clickable"))
+            if aid is None:
+                return report(f'Stopped at "{label}": {why}. The page is as it is now; continue from there.')
+            action = {"do": "click", "id": aid}
+            veto = self.guard(action) if self.guard else None
+            if veto:
+                return report(f'"{label}" was refused: {veto}')
+            alerts_before, page_before = set(ALERT.findall(page)), self.tab.document
+            result = str(await asyncio.wait_for(self.tab.click(aid), STEP_TIMEOUT))
+            if not result.startswith("clicked"):  # gone, disabled, a dialog in the way: the model reads the page
+                return report(f'Clicking "{label}" did not work: {result[:200]}')
+            done.append(label)
+            if self.on_action is not None:  # walk learning (agent.py) sees every click of the chain on its own page
+                note = await self.on_action(action, page_before, result)
+                if note:
+                    return report(note)
+        return report("") + "; the page at its end is shown now"
+
     async def _browser(self, action: dict) -> str:
         do, tab = action.get("do"), self.tab
         if do == "login":
@@ -363,6 +414,8 @@ class Agent:
             return await tab.click(action.get("id"))
         if do == "steps":
             return await self._steps(action.get("steps") or [])
+        if do == "path":
+            return await self._path(action.get("labels") or action.get("path") or [])
         if do == "fill":
             return await tab.fill(action.get("id"), action.get("text", ""), bool(action.get("enter")))
         if do == "select":
@@ -539,14 +592,16 @@ class Agent:
                     results.append(veto)
                     continue
                 before, page_before = self.tab.page.url, self.tab.document
+                limit = STEPS_TIMEOUT if do == "steps" else PATH_TIMEOUT if do == "path" else STEP_TIMEOUT
                 try:
-                    result = await asyncio.wait_for(self._browser(action), STEPS_TIMEOUT if do == "steps" else STEP_TIMEOUT)
+                    result = await asyncio.wait_for(self._browser(action), limit)
                 except asyncio.TimeoutError:
-                    result = f"{do} took longer than {STEP_TIMEOUT} s and was stopped; the page may be stuck"
+                    result = f"{do} took longer than {limit} s and was stopped; the page may be stuck"
                 except Exception as error:  # noqa: BLE001
                     result = f"{do} failed: {str(error)[:200]}"
                 results.append(result)
-                if self.on_action is not None:  # the clerk's automatic form replay (submit.py), whatever the style
+                # (a path reports each of its clicks to on_action itself, each on the page it was taken on)
+                if self.on_action is not None and do != "path":  # the clerk's automatic form replay (submit.py), whatever the style
                     note = await self.on_action(action, page_before, str(result))
                     if note:
                         results.append(note)
@@ -576,7 +631,7 @@ class Agent:
                 if do in NAVIGATING:
                     failed = any(sign in str(result) for sign in ("Timeout", "timed out", "took longer", "detached", "ERR_ABORTED"))
                     stuck = stuck + (2 if do == "goto" else 1) if failed else 0  # goto: retried once already
-                if do != "click":
+                if do not in ("click", "path"):  # a path is clicks: the pages it passed joined the trail (_path)
                     self.forget_trail()
                 if do in ("collect", "fetch"):
                     self.held = (self.tab.document, self.tab.document_source)

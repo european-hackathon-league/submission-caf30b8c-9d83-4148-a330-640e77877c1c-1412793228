@@ -91,6 +91,7 @@ How to work
   candidate the question names, with file_each once you have walked one record and know which of its tabs and
   paths hold the facts (also for a list with a single record you need), else with keep. The case file matches them
   against the requirement values, which can still change when amendments or reserves are filed.
+- Navigation you can already name (a menu, then a tab, then a link) takes ONE turn with path, not a turn per click.
 - Follow the search hints a website gives. If a search returns nothing or too much, change the search terms.
 - When a question asks for every item in a list, inspect its page controls and use collect on the control that
   advances that list before filing it. Check the resulting page count or end state; do not mark a list complete after
