@@ -164,6 +164,22 @@ chooses, helpers extract, paginate, replay a model-chosen path, calculate, valid
 (1) ERP actually using `file_each` with paths, (2) the clerk using `steps` every time, (3) navigation circuit breaker,
 each measured separately (quality, time, calls, uncached tokens, cost).
 
+### Feedback on 1d0ecea (runs 1470dade: 100, 221 calls; 49f7be51: 0, 294 calls), checked 11 Oct 05:55 UTC
+
+1d0ecea was the **generalisation** fix (evals A and B 0 → 100, public-1 100 in 2 of 3), not a cost change; the feedback
+is about runtime and cost.
+
+| Point | Where we are |
+|---|---|
+| Slow navigation / recovery (78 s click, 45 s reads, tab renewal) | **Agreed, next to build**: circuit breaker (short commit wait, one direct-URL retry, earlier tab renewal) |
+| Mail / courier failed (4 min, no answer) | In 49f7be51 the **mail site failed in the sandbox** (ERR_ABORTED, 45 s reads). Circuit breaker + earlier courier tab renewal is our part |
+| Submission model-directed, one failure | Failure = clerk add-line loop + mail outage. **8c44dad: form replay** (one position by hand, code fills the rest; ~35-100 → ~10 clerk turns, no loop). Running on public ×2 and both evals |
+| ERP 60 calls | Agreed. `file_each` with paths exists but the model does not use it for ERP yet → worked example in the prompt next |
+| Extraction 46 calls | One per distinct document; ~5% of tokens. Low priority |
+| Repeated "done" | Measured 1-2 per agent per run: not a problem |
+| Global 10-12 call cap | Not done on purpose: costs quality, fits only a scripted design rule 11 forbids; the clerk turn reserve is the safe form |
+| History / 1.4 M tokens | Partly addressed; the big fixed block is the system prompt per call, so fewer calls (`file_each`, form replay) is the bigger lever |
+
 ## Where the cost goes (keep in mind for every change)
 
 Measured on the branch's 100 run 2b8b5ca8 ($0.31): **199 calls sent 2.48 M input tokens, about 12,400 per call,
@@ -237,7 +253,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 05:36 | run_76dc3099 | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | running | | | | Public check 4 |
+| 05:36 | **run_76dc3099** | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | **100** | ✅ | 8 min | 237 / $0.24 | Public check 4 |
+| 05:48 | run_34a51556 | Maria | `maria/cost` **8c44dad** (+ **form replay** `fill_positions`: one position by hand, code fills the rest) | running | | | | Public check 2 |
+| 05:47 | run_4b369143 | Maria | `maria/cost` **8c44dad** (+ **form replay** `fill_positions`: one position by hand, code fills the rest) | running | | | | Public check 1: fewer clerk turns, no loop? |
 | 05:36 | run_e585d778 | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | running | | | | Public check 3 |
 | 05:19 | **run_1470dade** | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | **100** | ✅ | ~12 min | 221 / $0.24 | Public check 2: no regression on public-1 |
 | 05:12 | **run_f402181d** | Vamshidhar | package 35eb499d = `maria/escalation` **fc54a43** | **100** | ✅ | 10 min | 249 / $0.29 | |
