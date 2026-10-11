@@ -83,6 +83,7 @@ class MailChecklist(unittest.TestCase):
     def setUp(self):
         agent.SITE_ROLES.clear()
         agent.RELEASED.clear()
+        agent.TOPIC_SITES.clear()
 
     tearDown = setUp
 
@@ -95,8 +96,9 @@ class MailChecklist(unittest.TestCase):
         self.assertIn("The brief on mail search: Search words are combined with AND", checklist)
         topic_lines = [line for line in lines if line.startswith("- ")]
         self.assertEqual([line.split(":")[0] for line in topic_lines],
-                         ["- discount approval", "- condition rules (TG-2)", "- packaging tariffs (CF-7)",
-                          "- delivery release (SL-1, SL-2)", "- setup pools (TP-5)", "- project bonus (BP-9)"])
+                         ["- discount approval", "- condition rules (TG-2)", "- price indices", "- tech release",
+                          "- packaging tariffs (CF-7)", "- delivery release (SL-1, SL-2)", "- fx fixing",
+                          "- setup pools (TP-5)", "- project bonus (BP-9)"])
         self.assertIn("- delivery release (SL-1, SL-2): Search words: ZX-4411 Shipslot; authorized sender: dispatch@",
                       checklist)
 
