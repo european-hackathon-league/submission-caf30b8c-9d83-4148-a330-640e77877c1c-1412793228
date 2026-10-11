@@ -141,6 +141,71 @@ class FillPositions(unittest.IsolatedAsyncioTestCase):
         self.assertIn("no further bid position is shown", script.seen[1])
 
 
+FIRST_BY_HAND = {"thought": "position 1 in one go", "actions": [{"do": "steps", "steps": [
+    {"field": "Material", "value": "M-1"}, {"field": "Menge", "value": "4"}, {"field": "Preis", "value": "10,50"},
+    {"field": "Lieferzeit", "value": "2"}, {"press": "Weiter"}]}]}
+
+
+class AutomaticReplay(unittest.IsolatedAsyncioTestCase):
+    async def test_after_the_first_position_code_enters_the_others_without_being_asked(self):
+        form = PositionForm()
+        script = await run(form, [FIRST_BY_HAND])
+        self.assertEqual(form.saved["1"], {"material": "M-1", "qty": "4", "price": "10,50", "weeks": "2"})
+        self.assertEqual(form.saved["2"], {"material": "M-2", "qty": "30", "price": "1234,56", "weeks": "6"})
+        self.assertEqual(form.saved["3"], {"material": "M-3", "qty": "7", "price": "99,00", "weeks": "1"})
+        self.assertIn("entered automatically", script.seen[1])
+        self.assertEqual(len(script.seen), 2)  # one model turn for all three positions, then done
+
+    async def test_nothing_is_replayed_while_the_form_stays_on_the_position(self):
+        form = PositionForm(refuse="1")
+        script = await run(form, [FIRST_BY_HAND])
+        self.assertEqual(form.saved, {})
+        self.assertNotIn("entered automatically", script.seen[1])
+
+
+class LearningTheTemplate(unittest.TestCase):
+    LINE = {"position": "1", "material_number": "M-1", "quantity": 4, "unit_price": "1906.85", "lead_time_weeks": 3,
+            "surcharge_per_unit": "0.00", "rebate_total": "0.00", "material": {"bore_mm": 50, "certification": None}}
+
+    def test_typed_values_become_placeholders(self):
+        steps = [{"field": "Bore", "value": "50"}, {"field": "Qty", "value": "4"},
+                 {"field": "Price", "value": "1.906,85"}, {"press": "Next"}]
+        template, ambiguous = submit.templatize(steps, self.LINE)
+        self.assertEqual(template, [{"field": "Bore", "value": "{bore_mm}"}, {"field": "Qty", "value": "{quantity}"},
+                                    {"field": "Price", "value": "{unit_price|de}"}, {"press": "Next"}])
+        self.assertEqual(ambiguous, [])
+
+    def test_the_forms_word_for_no_certificate_is_learned(self):
+        template, _ = submit.templatize([{"field": "Certificate", "value": "Without certificate"}], self.LINE)
+        self.assertEqual(template, [{"field": "Certificate", "value": "{certification|none=Without certificate}"}])
+
+    def test_a_value_shared_by_two_fields_is_not_guessed(self):
+        template, ambiguous = submit.templatize([{"field": "Rebate for the position", "value": "0,00"}], self.LINE)
+        self.assertEqual(len(ambiguous), 1)
+        self.assertEqual(ambiguous[0][2], ["{rebate_total|de}", "{surcharge_per_unit|de}"])
+
+
+class ResolvingAmbiguity(unittest.IsolatedAsyncioTestCase):
+    async def test_the_model_names_the_field_from_its_label(self):
+        template = [{"field": "Rebate for the position", "value": "0,00"}]
+        ambiguous = [(0, "Rebate for the position", ["{rebate_total|de}", "{surcharge_per_unit|de}"])]
+
+        async def model(messages, **kwargs):
+            return {"choices": [{"field": "Rebate for the position", "placeholder": "{rebate_total|de}"}]}
+
+        with patch.object(llm, "chat_json", model):
+            resolved = await submit.resolve_template(template, ambiguous)
+        self.assertEqual(resolved, [{"field": "Rebate for the position", "value": "{rebate_total|de}"}])
+
+    async def test_an_answer_outside_the_candidates_stops_the_replay(self):
+        async def model(messages, **kwargs):
+            return {"choices": [{"field": "X", "placeholder": "{quantity}"}]}
+
+        with patch.object(llm, "chat_json", model):
+            self.assertIsNone(await submit.resolve_template([{"field": "X", "value": "0"}],
+                                                            [(0, "X", ["{a}", "{b}"])]))
+
+
 class TheTemplate(unittest.TestCase):
     LINE = {"position": "2", "material_number": "M-2", "quantity": 30, "unit_price": "1234.56", "lead_time_weeks": 6,
             "rebate_total": None, "material": {"bore_mm": 50, "certification": None}}

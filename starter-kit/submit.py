@@ -13,6 +13,7 @@ import re
 import time
 from decimal import Decimal
 
+import llm
 import sanity
 from browser_env import Tab
 from calculator import Bid
@@ -82,7 +83,10 @@ Reading the bid sheet
   This includes a configurator where each choice must be applied before the next one appears: put every choice
   and its apply button, in order, into the same "steps" action, then the amounts and the button that moves on.
   You know every value from the bid; you do not need to see each list first.
-- After the first position is entered and the form has moved on to the next one, let code enter the others:
+- Enter the first position with one "steps" action: every choice with its apply button, all amounts and the
+  control that moves on to the next position. When the form moves on, code enters the remaining positions with
+  the same steps and their own values from the bid sheet, and tells you what it entered.
+- If that did not happen (the report says so), enter the next position yourself, then let code enter the others:
   {{"do": "fill_positions", "done": ["<position you entered>"], "template": [<the steps that worked for it, every
   value replaced by a placeholder>]}}. Placeholders are the bid sheet's names in braces: {{quantity}},
   {{unit_price|de}} (decimal comma), {{lead_time_weeks}}, {{material_number}}, {{bore_mm}}, {{stroke_mm}},
@@ -193,6 +197,79 @@ def fill_template(template: list, line: dict) -> list:
         if not skip:
             steps.append({**step, "value": value})
     return steps
+
+
+def _number_forms(value) -> set[str]:
+    """How a bid-sheet value may have been typed: as it is, with a decimal comma, with German thousands separators."""
+    text = str(value)
+    forms = {text}
+    try:
+        number = Decimal(text)
+    except Exception:  # noqa: BLE001  not a number
+        return forms
+    if "." in text:
+        forms.add(text.replace(".", ","))
+        forms.add(f"{number:,.2f}".replace(",", " ").replace(".", ",").replace(" ", "."))
+    return forms
+
+
+def templatize(steps: list, line: dict) -> tuple[list, list[tuple[int, str, list[str]]]]:
+    """The template of one entered position (automatic form replay): every field value that equals one of this
+    position's bid-sheet values becomes its placeholder ({quantity}, {unit_price|de}, ...). The one value the sheet
+    does not have, typed for a position whose certification is null, is the form's word for "no certificate".
+    Returns the template and the ambiguous fields (index, label, candidate placeholders): a value that equals two
+    fields (0.00 for surcharge and rebate) is not guessed here (resolve_template asks the model)."""
+    values = {**(line.get("material") or {}), **{k: v for k, v in line.items() if k not in ("material", "position")}}
+    forms: dict[str, set[str]] = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        for form in _number_forms(value):
+            forms.setdefault(form.strip().lower(), set()).add("{" + key + ("|de" if "," in form else "") + "}")
+    template, ambiguous, unmatched = [], [], []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        value = step.get("value")
+        if "press" in step or not isinstance(value, str):
+            template.append(step)
+            continue
+        found = sorted(forms.get(value.strip().lower(), set()))
+        keys = {h.replace("|de", "") for h in found}
+        if len(keys) > 1:
+            ambiguous.append((len(template), str(step.get("field", "")), found))
+            template.append(step)
+        elif keys:
+            template.append({**step, "value": found[0]})
+        else:
+            unmatched.append(len(template))
+            template.append(step)
+    if len(unmatched) == 1 and "certification" in values and values["certification"] is None:
+        index = unmatched[0]
+        template[index] = {**template[index], "value": "{certification|none=" + template[index]["value"] + "}"}
+    return template, ambiguous
+
+
+async def resolve_template(template: list, ambiguous: list[tuple[int, str, list[str]]]) -> list | None:
+    """Fields whose value matched several bid-sheet fields: the model names, from the field's label, which one it
+    takes (one short call). None when it cannot."""
+    if not ambiguous:
+        return template
+    fields = [{"field": label, "candidates": candidates} for _, label, candidates in ambiguous]
+    reply = await llm.chat_json([
+        {"role": "system", "content": "You map bid form fields to bid sheet values. Answer only with JSON."},
+        {"role": "user", "content": "For each form field, choose the one bid sheet placeholder it takes, from its "
+                                    "candidates, by what the field's label says. Answer "
+                                    '{"choices": [{"field": "<label>", "placeholder": "<one candidate>"}]}\n'
+                                    + json.dumps(fields, ensure_ascii=False)}], think=False, max_tokens=800,
+        label="submit:template")
+    chosen = {str(c.get("field")): str(c.get("placeholder")) for c in reply.get("choices") or [] if isinstance(c, dict)}
+    resolved = list(template)
+    for index, label, candidates in ambiguous:
+        if chosen.get(label) not in candidates:
+            return None
+        resolved[index] = {**resolved[index], "value": chosen[label]}
+    return resolved
 
 
 def shown_position(page: str, candidates: list[str], every: list[str] | None = None) -> str | None:
@@ -449,6 +526,33 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                          "fill_positions": fill_positions}, deadline=deadline,
                   max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=clerk_guard,
                   circle_hint=CLERK_CIRCLE_HINT)
+    chains: dict[str, list] = {}  # steps the clerk ran while the form showed each position (automatic replay)
+
+    async def after_steps(steps: list, before: str, result: str) -> str:
+        """Automatic form replay: when the clerk's steps entered a position and the form moved on to another bid
+        position, that position's steps become the template (templatize; the model resolves only ambiguous fields)
+        and code enters every further position (fill_positions), without waiting for the model to ask for it."""
+        every = [str(line["position"]) for line in sheet["positions"]]
+        position = shown_position(before, [p for p in every if p not in replayed], every)
+        if position is None or time.time() > deadline - WRAP_UP:
+            return result
+        chains.setdefault(position, []).extend(step for step in steps if isinstance(step, dict))
+        following = [p for p in every if p not in replayed and p != position]
+        if shown_position(await tender_tab.observe(), following, every) is None:
+            return result  # still on this position (or past the positions): nothing to replay yet
+        replayed.add(position)
+        template, ambiguous = templatize(chains[position], next(l for l in sheet["positions"] if str(l["position"]) == position))
+        template = await resolve_template(template, ambiguous)
+        if template is None:
+            return result + ("\nThe next positions are not entered automatically (a field could not be matched to "
+                             "the bid sheet): enter the next one, then use fill_positions.")
+        line = json.dumps(template, ensure_ascii=False)[:400]
+        print(f"[submit] automatic form replay after position {position}: {line}", flush=True)
+        report = await fill_positions({"template": template})
+        return (result + f"\nPosition {position} is in. The following positions were entered automatically with "
+                         "the same steps and their own values:\n" + report)
+
+    clerk.after_steps = after_steps
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
