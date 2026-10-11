@@ -25,11 +25,20 @@ CLERK_STEPS, COURIER_STEPS = 120, 25
 # The clerk's hint when it goes in circles (run d3ca14df: 95 turns of "fill the position, add it, empty again" until
 # its step cap, never signed). The brief's rule 9: every bid form lets a position be left out explicitly, and a
 # signed bid with one position left out keeps the others' points; an unsigned one scores nothing.
+# Run 8a2e1426: the same loop on one position, then the clerk left out that one AND every position after it. So the
+# hint first sends it back to the start of the stuck position (a configurator that got out of step is reset by doing
+# it again from its first choice, as in every clean run), and leaving out is for that one position only.
 CLERK_CIRCLE_HINT = (
     "You are going in circles: the same steps keep repeating without progress. Read the page for an error or hint "
-    "next to the fields and fix exactly that. If this one position still cannot be saved, leave it out with the "
-    "form's explicit way of omitting a position and go on with the others and the signature: a signed bid keeps the "
-    "points of every position it has; an unsigned one scores nothing.")
+    "next to the fields and fix exactly that. If the form seems out of step (fields empty or locked, \"not possible "
+    "in this step\"), start this position over: reload the page or go back to its first choice, then redo every "
+    "choice with its apply button and all amounts in one \"steps\" action, as for the positions before. Only if that "
+    "fails too, leave out THIS ONE position with the form's explicit way of omitting a position. Every position "
+    "after it has its values on the bid sheet: enter each of them normally, then sign. A signed bid keeps the points "
+    "of every position it has; an unsigned one scores nothing.")
+# Leaving out a priced position costs its points, so the clerk may do it once (the position it is stuck on) on top of
+# the positions the calculator left out, unless time is short. Matched on the omit control's label in a few languages.
+OMIT_CONTROL = re.compile(r"auslass|weglass|omit|leave out|skip position|nicht anbieten", re.I)
 # How often the final step is held back because the page does not show the bid (preflight "unproven"). The wait is
 # bounded: a signed bid scores, an unsigned one does not.
 UNPROVEN_REFUSALS = 2
@@ -191,6 +200,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     # The control that requested the signing code: clicking it again before a code came back voids the code that is
     # on its way (sandbox run a85be021 lost its signature this way). Recorded when the clerk first asks the mailbox.
     code_request = {"label": None, "searches": 0, "last_click": None}
+    omits = {"count": 0}  # omit controls pressed by the clerk (bounded in clerk_guard)
 
     def _label_of(aid) -> str | None:
         user = clerk.turns[-1]["user"] if clerk.turns else ""
@@ -208,6 +218,13 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             return (f'blocked: "{code_request["label"]}" was already used and no code has come back yet. A new '
                     "request makes the code already on its way invalid. Ask the mailbox colleague again (ask_mail) "
                     "and say exactly what to look for: the newest code mail for this tender.")
+        if label and bid.decision == "bid" and OMIT_CONTROL.search(label):
+            if omits["count"] >= len(bid.omitted) + 1 and deadline - time.time() >= WRAP_UP:
+                return (f'blocked: "{label}" would leave out a position that has its values on the bid sheet. Only '
+                        "the one position you were stuck on may be left out. Enter this position with its values "
+                        "from the bid sheet (all choices with their apply buttons and the amounts in one \"steps\" "
+                        "action), then move on.")
+            omits["count"] += 1
         if label:
             code_request["last_click"] = label  # read from the page the clerk acted on, before the click happens
         return None

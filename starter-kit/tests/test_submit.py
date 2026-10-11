@@ -282,6 +282,38 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([step for step in tender.done if step == ("click", 7)], [("click", 7)])
         self.assertIn("blocked", script.turns("submit")[3]["user"])
 
+    async def omitting(self, seconds: float) -> tuple[FakeTab, Script]:
+        # run 8a2e1426: stuck on one position, the clerk left out that one and then every position after it
+        omit = {"thought": "", "actions": [{"do": "click", "id": 21}]}
+        script = Script(submit=[omit, omit, omit, done(summary="stopped")])
+        tender = FakeTab("tender", 'Position\n[21] button "Position auslassen (Teilpunkte)"\n[24] button "Weiter"')
+        with patch.object(llm, "chat_json", script):
+            await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + seconds)
+        return tender, script
+
+    async def test_only_the_stuck_position_may_be_left_out_beyond_the_calculators(self):
+        tender, script = await self.omitting(900)
+        # a_bid() has one position the calculator left out, so two omits are allowed and the third is refused
+        self.assertEqual([step for step in tender.done if step == ("click", 21)], [("click", 21)] * 2)
+        self.assertIn("blocked", script.turns("submit")[3]["user"])
+        self.assertIn("has its values on the bid sheet", script.turns("submit")[3]["user"])
+
+    async def test_when_time_is_short_positions_may_still_be_left_out(self):
+        tender, _ = await self.omitting(submit.WRAP_UP - 30)
+        self.assertEqual([step for step in tender.done if step == ("click", 21)], [("click", 21)] * 3)
+
+    async def test_other_controls_are_not_counted_as_omitting(self):
+        go = {"thought": "", "actions": [{"do": "click", "id": 24}]}
+        script = Script(submit=[go, go, go, go, done(summary="stopped")])
+        tender = FakeTab("tender", 'Position\n[21] button "Position auslassen (Teilpunkte)"\n[24] button "Weiter"')
+        with patch.object(llm, "chat_json", script):
+            await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertEqual(tender.done.count(("click", 24)), 4)
+
+    async def test_the_circle_hint_restarts_the_position_and_omits_only_that_one(self):
+        self.assertIn("start this position over", submit.CLERK_CIRCLE_HINT)
+        self.assertIn("THIS ONE position", submit.CLERK_CIRCLE_HINT)
+
     async def test_clerk_recovers_from_an_interrupted_session_before_review(self):
         class RestoringTab(FakeTab):
             async def login(self):
