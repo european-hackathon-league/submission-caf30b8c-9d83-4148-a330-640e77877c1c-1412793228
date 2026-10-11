@@ -300,6 +300,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 08:32 | run_4068e3c3 | Maria | `maria/cost` **8999ddd** (gate fix) | running | | | | Public check 2 |
 | 08:30 | run_b462cdb3 | Maria | `maria/cost` **8999ddd** (+ gate fix: standing job per site, no done before the job is done, wake on new records, material questions without catalogue group, token budget off; also Sprint F mail coverage + Sprint G clerk fixes) | running | | | | Public check 1 |
 | 08:21 | run_fa240524 | Vamshidhar | package 2c82a7bf (= the current final submission's package) | running | | | | |
 | 08:12 | run_fde2953b → retry **run_7a2a43e6** | Maria | `maria/cost` **ccf5612** (rerun, named "maria/cost ccf5612") | **100** (retry) | ✅ | 9.8 min | 210 / $0.23 | Comparison run 2. Slow model (1054 s in calls, 4 failed). Clerk 16 turns, replay 4×. Input 1.93 M (ERP 629k, mail 406k, customer 357k) |
