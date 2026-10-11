@@ -238,6 +238,7 @@ LOGIN_JS = r"""
 """
 
 MAX_OBSERVATION = 14000
+NAV_COMMIT, NAV_LOAD = 8, 12  # seconds for the server to answer a navigation, then for the page to build (goto)
 UNREADABLE = "(this document could not be read"
 PAGE_BREAK = "===== collected page"  # between the pages of a list or document that `collect` followed to its end
 
@@ -706,10 +707,21 @@ class Tab:
         target = urljoin(self.page.url if self._on_site(self.page.url) else self.base_url + "/", str(url).strip())
         if not self._on_site(target):
             return f"{target} is not on this website; you only work on {self.base_url}"
+        # Two phases (circuit breaker): the server must answer within NAV_COMMIT seconds, once more at once if it does
+        # not; then the page gets NAV_LOAD seconds to build, and a page that answered but is slow still counts as
+        # opened (the page read decides). Before: one 20 s wait for the whole page, a slow page counted as failed.
+        for attempt in (1, 2):
+            try:
+                await self.page.goto(target, wait_until="commit", timeout=NAV_COMMIT * 1000)
+                break
+            except Exception as error:  # noqa: BLE001
+                if attempt == 2:
+                    return f"could not open {target}: {str(error)[:150]}"
+                self.events.append(f"{target} did not answer within {NAV_COMMIT} s; opened it once more")
         try:
-            await self.page.goto(target, wait_until="domcontentloaded", timeout=20000)
-        except Exception as error:  # noqa: BLE001
-            return f"could not open {target}: {str(error)[:150]}"
+            await self.page.wait_for_load_state("domcontentloaded", timeout=NAV_LOAD * 1000)
+        except Exception:  # noqa: BLE001
+            self.events.append(f"the page answered but was still building after {NAV_LOAD} s")
         await self.settle()
         return f"opened {self.page.url}"
 
