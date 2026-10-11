@@ -110,7 +110,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
-| 03:3x | run_(2nd) | Maria | `maria/cost` **9105e5e** (one past page in full instead of two; input tokens per agent in the summary) | running | | | | Cost check 2 of 2 |
+| 03:35 | run_4876a0ad | Maria | `maria/cost` **9105e5e** (one past page in full instead of two; input tokens per agent in the summary) | running | | | | Cost check 2 of 2 |
 | 03:32 | run_012496d3 | Maria | `maria/cost` **9105e5e** (one past page in full instead of two; input tokens per agent in the summary) | running | | | | Cost check 1 of 2: does the shorter history cut cost without hurting quality? |
 | 03:02 | **sub_ccfe5b8f + sub_debd95a5 (SUBMISSIONS, promoted by the organisers)** | Organisers | test runs 9902e32b and 1b83cba3 = **fc54a43** (package 35eb499d) | **100** 🎉 | ✅ | 6.3 / 6.6 min | $0.31 / $0.27 | **Our final package is now fc54a43** (latest passed submission: sub_ccfe5b8f), i.e. `maria/escalation` with all branch fixes. **Leaderboard 03:35 UTC: rank #7, 100, $0.2748, 6:33** (Plite and EliTUM passed us: 1:32/$0.075 and 6:48/$0.163) |
 | 03:02 | **run_9902e32b** | Maria | `maria/escalation` **fc54a43** (stuck position started over; only that one may be left out) | **100** 🎉 | ✅ | **6.3 min** 🏆 | 203 / $0.31 | Check 2 of 2: clean, investigation 217 s, 0 model timeouts. **Clerk 16 turns, ~160 s** form + TAN (before ~281 s), 6 `steps` actions, no loop, so the new omit guard did not need to fire (it is covered by unit tests). **Our fastest runs so far** |
