@@ -40,6 +40,22 @@ class AWorldWithFewerRules(unittest.TestCase):
         changes = [change for entry in case.inputs().clarifications for change in entry.quantity_changes]
         self.assertEqual(changes, [("30", 24, None)])  # not the other tender's, not the one after the scenario date
 
+    def test_a_change_notice_listed_as_current_does_not_replace_the_specification(self):
+        # eval variant B: a change notice filed among the revisions with status "current" became the governing
+        # revision; it has no requirements, so no position could be priced
+        case = casefile.CaseFile("brief", {"tender_reference": "T-77", "scenario_date": "2030-05-01"})
+        case.merge("revisions", {"document": "SPEC-9", "revisions": [
+            {"revision": "2", "date": "2030-03-01", "status": "current"},
+            {"revision": "CN-1", "date": "2030-04-01", "status": "current"}]})
+        case.merge("requirements", {"revision": "2", "requirements": [
+            {"requirement_ref": "R-1", "bore_mm": 40, "stroke_mm": 250, "mounting": "Flansch"}]})
+        self.assertEqual(case.governing_revision(), "2")
+
+    def test_change_notices_and_approval_registers_have_a_kind_to_be_read_with(self):
+        self.assertIn("change or amendment", casefile.SHAPES["clarifications"])
+        self.assertIn("A register of approvals", casefile.SHAPES["mail"])
+        self.assertIn("never a\nchange notice", casefile.SHAPES["revisions"])
+
     def test_the_extraction_is_told_that_one_plain_stock_figure_is_the_free_stock(self):
         self.assertIn("A single stock figure with no breakdown", casefile.SHAPES["material"])
 
