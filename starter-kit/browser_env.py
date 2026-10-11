@@ -419,6 +419,9 @@ class Tab:
         runs 41a5de64, c3c4b1e8 and 64397a5e one browser could not load the tender portal for the whole run, fresh
         tabs in it included, while the other browsers kept working."""
         old = self.page
+        # The fresh tab goes back to the page the agent was on, as a person would reopen it (it used to start at the
+        # home page, and the agent spent turns finding its way back); the home page only when that page fails.
+        where = old.url if self._on_site(old.url) else self.base_url + "/"
         self.renewals += 1
         moved = self.renewals >= 2 and bool(self.spares)
         context = self.spares[(self.renewals - 2) % len(self.spares)] if moved else old.context
@@ -429,14 +432,19 @@ class Tab:
             await old.close()
         except Exception:  # noqa: BLE001
             pass
-        result = await self.goto(self.base_url + "/")
-        if not moved:
-            return result
-        try:
-            result += "; " + await self.login()
-        except Exception as error:  # noqa: BLE001
-            result += f"; logging in again failed: {str(error)[:120]}"
-        return "moved to another browser (this one could not load the website): " + result
+        if moved:  # another browser has no session yet: home page, log in, then back to the page
+            result = await self.goto(self.base_url + "/")
+            try:
+                result += "; " + await self.login()
+            except Exception as error:  # noqa: BLE001
+                result += f"; logging in again failed: {str(error)[:120]}"
+            if where.rstrip("/") != self.base_url.rstrip("/"):
+                result += "; " + await self.goto(where)
+            return "moved to another browser (this one could not load the website): " + result
+        result = await self.goto(where)
+        if result.startswith("could not") and where.rstrip("/") != self.base_url.rstrip("/"):
+            result += "; " + await self.goto(self.base_url + "/")
+        return result
 
     async def screenshot(self) -> str | None:
         """The visible part of the page as a base64 JPEG, for a model that reads images; None when it fails."""
