@@ -16,7 +16,7 @@ from typing import Awaitable, Callable
 
 import llm
 import sanity
-from browser_env import NOT_KEPT, Tab
+from browser_env import NOT_KEPT, PAGE_BREAK, Tab, without_ids
 from coverage import Ledger
 
 ACTIONS_HELP = """Reply with ONE JSON object: {"thought": "<one or two short sentences: what the page tells you and what you do next>", "actions": [ ... ]}.
@@ -90,6 +90,11 @@ FULL_TURNS = int(os.environ.get("FULL_TURNS", "1"))
 HISTORY_TURNS = int(os.environ.get("HISTORY_TURNS", "10"))
 
 
+def _plain(page: str) -> str:
+    """A page read without its element ids: two reads of the same page compare equal."""
+    return without_ids(page)
+
+
 def _thought(reply: str) -> str:
     """The thought of a stored reply, one line, for the condensed older history."""
     try:
@@ -98,6 +103,7 @@ def _thought(reply: str) -> str:
         text = reply
     return " ".join(text.split())[:200] or "(no thought)"
 NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps"}
+TRAIL_PAGES = 12  # pages of one document read in place that a keep files together (Agent.trail_pages)
 STEPS_LIMIT, STEPS_TIMEOUT = 30, 240  # one "steps" action: at most this many steps, and seconds in all
 ALERT = re.compile(r"\((?:alert|status)\)[^\n]*")  # a message the page announces to screen readers (Tab.observe)
 CONTROL = re.compile(r'\[(\d+)\] (?:\(in collapsed menu\) )?(select|input(?:\(\w+\))?|button|checkbox|radio|link|clickable|switch) "([^"]*)"([^\[]*)')
@@ -150,7 +156,8 @@ class Agent:
                  extra: dict[str, Callable[[dict], Awaitable[str]]] | None = None, deadline: float | None = None,
                  max_steps: int = 80, think: bool = False,
                  idle: Callable[[str], Awaitable[str | None]] | None = None,
-                 guard: Callable[[dict], str | None] | None = None, finish_on_repeat: int | None = None, circle_hint: str | None = None):
+                 guard: Callable[[dict], str | None] | None = None, finish_on_repeat: int | None = None, circle_hint: str | None = None,
+                 before_done: Callable[[dict], Awaitable[str | None]] | None = None):
         """`briefing()` heads every turn. `extra` adds actions: name -> handler(action) -> result text.
         `idle("done")` lets the caller hold a finished agent until there is news for it (returns the news) or
         let it stop (returns None)."""
@@ -159,6 +166,7 @@ class Agent:
         self.deadline = deadline or time.time() + 3600
         self.max_steps, self.think, self.idle = max_steps, think, idle
         self.guard = guard
+        self.before_done = before_done  # may refuse a done the model sends, with what is still missing (agent.py)
         # An agent that states the same thought this many turns in a row has its answer and is only "verifying":
         # it gets one forced final turn instead of running out of time (stress test: the courier read the right code,
         # then re-verified it for 14 turns and ended with no answer).
@@ -180,6 +188,11 @@ class Agent:
         # called after every browser action with the page it was taken on (the clerk's automatic form replay)
         self.on_action: Callable[[dict, str, str], Awaitable[str | None]] | None = None
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
+        # The pages the model read at one address since its last keep, reached by clicks only (a document paged in
+        # place, e.g. inside an embedded viewer): `document()` hands them to keep together (see `trail_pages`).
+        self.trail: list[str] = []
+        self.trail_source = ""
+        self.trail_filed: set[str] = set()  # pages at trail_source that a keep filed already
         self.coverage = Ledger()  # what this agent really opened, typed and followed (coverage.py)
         self.steps = 0
         self.started = time.time()
@@ -190,8 +203,55 @@ class Agent:
         return self._circle_hints
 
     def document(self) -> tuple[str, str]:
-        """What the agent is looking at: the document it collected or fetched, else the page as last read."""
-        return self.held or (self.tab.document, self.tab.document_source)
+        """What the agent is looking at: the document it collected or fetched, else the page as last read; and when
+        it paged through a document in place since its last keep, every page of it that it read. Sandbox run
+        dafda06b: the agent clicked "next page" through an embedded specification of 5 pages, read every requirement
+        in its thoughts, and kept only the last page: 4 of 5 requirements never reached the case file."""
+        if self.held:
+            return self.held
+        pages = self.trail_pages()
+        if len(pages) > 1:
+            return "\n".join(f"{PAGE_BREAK} {number} =====\n{page}" for number, page in enumerate(pages, 1)), self.tab.document_source
+        return self.tab.document, self.tab.document_source
+
+    def read_page(self) -> None:
+        """The model was shown the tab's page: it joins the trail while the address stays the same."""
+        document, source = self.tab.document, self.tab.document_source
+        if not document:
+            return
+        if source != self.trail_source:
+            self.trail, self.trail_source, self.trail_filed = [], source, set()
+        if document not in self.trail and _plain(document) not in self.trail_filed:
+            self.trail.append(document)
+            del self.trail[:-TRAIL_PAGES]
+
+    def forget_trail(self, filed: list[str] | None = None) -> None:
+        """After an action other than a click (a form filled, a box ticked, another address): what is read from now
+        on is not another page of the same document. After a keep (`filed`, the pages it filed): those pages do not
+        join the trail again when the agent reads them once more before it pages on."""
+        if filed is None:
+            self.trail, self.trail_source, self.trail_filed = [], "", set()
+        else:
+            self.trail = []
+            self.trail_filed |= {_plain(page) for page in filed}
+
+    def trail_pages(self) -> list[str]:
+        """The distinct pages of the trail plus the page as last read, oldest first, without those a keep already
+        filed. A page whose every line is also on another one (a section toggled closed, the same page before a
+        notice appeared) is left out."""
+        if self.tab.document_source != self.trail_source:
+            return [self.tab.document] if self.tab.document else []
+        pages = list(self.trail)
+        if self.tab.document and self.tab.document not in pages and _plain(self.tab.document) not in self.trail_filed:
+            pages.append(self.tab.document)
+        lines = [set(line.strip() for line in _plain(page).splitlines()[1:] if line.strip()) for page in pages]
+        kept = []
+        for index, page in enumerate(pages):
+            covered = any(other != index and lines[index] <= lines[other] and (lines[index] < lines[other] or other > index)
+                          for other in range(len(pages)))
+            if not covered:
+                kept.append(page)
+        return kept[-TRAIL_PAGES:]
 
     def log(self, text: str) -> None:
         print(f"[{self.name} {self.steps:02d} t+{time.time() - self.started:.0f}s] {text}", flush=True)
@@ -358,6 +418,7 @@ class Agent:
                 page = f"(the page could not be read: {str(error)[:200]})"
             self.coverage.saw(page)
             self.page_seen = page  # the page the model answers to: its ids and link targets (file_each)
+            self.read_page()
             results.extend(self.tab.take_events())
             done_text = "\n".join(f"{n}. {text}" for n, text in enumerate(results, 1)) or "(none yet)"
             left = int(self.deadline - time.time())
@@ -448,7 +509,11 @@ class Agent:
                     continue
                 do = action.get("do")
                 if do == "done":
-                    finished = action
+                    refusal = await self.before_done(action) if self.before_done else None
+                    if refusal:
+                        results.append(refusal)
+                    else:
+                        finished = action
                     break
                 if do == "wait":
                     await asyncio.sleep(2)
@@ -463,6 +528,8 @@ class Agent:
                         results.append(await self.extra[do](action))
                     except Exception as error:  # noqa: BLE001
                         results.append(f"{do} failed: {str(error)[:200]}")
+                    if do not in ("keep", "answer"):  # keep clears the trail itself once it filed it
+                        self.forget_trail()
                     continue
                 if moved:
                     results.append(f'skipped {json.dumps(action, ensure_ascii=False)[:120]}: the page changed, its ids are stale')
@@ -509,6 +576,8 @@ class Agent:
                 if do in NAVIGATING:
                     failed = any(sign in str(result) for sign in ("Timeout", "timed out", "took longer", "detached", "ERR_ABORTED"))
                     stuck = stuck + (2 if do == "goto" else 1) if failed else 0  # goto: retried once already
+                if do != "click":
+                    self.forget_trail()
                 if do in ("collect", "fetch"):
                     self.held = (self.tab.document, self.tab.document_source)
                 elif do in NAVIGATING:

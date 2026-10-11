@@ -12,7 +12,7 @@ import io
 import re
 import zipfile
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from sanity import same_value
 
@@ -383,6 +383,59 @@ def document_text(data: bytes, content_type: str, name: str, depth: int = 0) -> 
         parser.feed(text)
         text = "".join(parser.parts)
     return clean_text(text)
+
+
+TARGET_JS = """el => { const raw = el.getAttribute('href') || el.getAttribute('data-url') || el.getAttribute('data-href')
+                                || el.getAttribute('formaction') || '';
+                    try { return raw && !raw.startsWith('#') && !raw.startsWith('javascript:') ? new URL(raw, document.baseURI).href : ''; }
+                    catch (e) { return ''; } }"""
+# Every control of a document that could page it: its label, tag, the address it leads to (or loads), and whether it
+# is disabled; for the search of a sibling paging control (Tab.collect).
+PAGERS_JS = r"""() => [...document.querySelectorAll('a[href], button, [role=button], [role=link]')].slice(0, 300).map(el => {
+  const raw = el.getAttribute('href') || el.getAttribute('data-url') || el.getAttribute('data-href') || el.getAttribute('formaction') || '';
+  let target = '';
+  try { target = raw && !raw.startsWith('#') && !raw.startsWith('javascript:') ? new URL(raw, document.baseURI).href : ''; } catch (e) {}
+  return {name: (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+          tag: el.tagName, target,
+          disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true' || !!el.closest('fieldset[disabled],[inert]')};
+})"""
+STATUS_LINE = re.compile(r"\((?:alert|status)\)")
+
+
+def _progress(document: str) -> str:
+    """What a page read says, for telling whether a paging control brought anything new: without element ids, the
+    address line and the messages a page announces (a "loading failed" notice is not a new page)."""
+    return "\n".join(line for line in without_ids(document).splitlines()
+                     if not line.startswith("url: ") and not STATUS_LINE.search(line))
+
+
+def _next_address(candidate: str, target: str) -> bool:
+    """Whether a control leading to `candidate` pages to where a control leading to `target` was meant to: the same
+    address, or the same address with one number in its query at least as high (the page after the one shown)."""
+    if not candidate or not target:
+        return False
+    one, two = urlparse(candidate), urlparse(target)
+    if (one.netloc, one.path) != (two.netloc, two.path):
+        return False
+    if one.query == two.query:
+        return True
+    first, second = parse_qs(one.query, keep_blank_values=True), parse_qs(two.query, keep_blank_values=True)
+    if set(first) != set(second):
+        return False
+    differ = [key for key in first if first[key] != second[key]]
+    if len(differ) != 1:
+        return False
+    try:
+        return int(first[differ[0]][-1]) >= int(second[differ[0]][-1])
+    except ValueError:
+        return False
+
+
+async def _target_of(control) -> str:
+    try:
+        return await control.evaluate(TARGET_JS)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 class Tab:
@@ -776,11 +829,18 @@ class Tab:
         if not info["name"]:
             return f"[{aid}] has no label to follow from page to page"
         first, start = self.document, self.page.url
-        pages, seen = [first], {first}
+        pages, seen = [first], {_progress(first)}
         limit = max(1, min(int(max_pages or 10), 30))
+        home = next((frame for low, high, frame in self.frames if low <= int(aid) < high), None)
+        chosen = info["name"]
+        switched = ""  # the label of a sibling control that took over from one that made no progress
 
         async def next_control():
-            for _, _, frame in self.frames:
+            # the chosen control's own document (an embedded viewer) first: another frame can hold a control with the
+            # same label that pages something else
+            frames = [frame for _, _, frame in self.frames]
+            frames.sort(key=lambda frame: frame is not home)
+            for frame in frames:
                 candidates = frame.locator("a[href], button, [role=button], [role=link]")
                 for index in range(min(await candidates.count(), 200)):
                     candidate = candidates.nth(index)
@@ -794,14 +854,16 @@ class Tab:
                         continue
             return None
 
-        capped = False
-        for turn in range(limit):
+        capped, seen_dud = False, False
+        turn = 0
+        while turn < limit:
             control = await next_control()
             if control is None:
                 break
             if turn == limit - 1:  # the page limit ended this, not the list: the control is still there
                 capped = True
                 break
+            target = await _target_of(control)
             try:
                 await control.click(timeout=2500)
             except Exception:  # noqa: BLE001
@@ -810,17 +872,40 @@ class Tab:
                 except Exception:  # noqa: BLE001
                     break
             await self.read()
-            if self.document in seen:
+            progress = _progress(self.document)
+            if progress not in seen:
+                seen.add(progress)
+                pages.append(self.document)
+                turn += 1
+                continue
+            # No new content: the control is a dud (a "load more" that fails, or one that keeps loading the same
+            # page). Sandbox run dafda06b: "load more" of an embedded paged document failed after its first press,
+            # collect stopped at page 1 of 5, and the agent paged by hand and filed only the last page. The same
+            # document often has a second control that leads to the page the dud was meant to load (a "next page"
+            # link to the same address, or to the page after the one already shown): that one takes over, once.
+            seen_dud = True
+            if switched or not target:
                 break
-            seen.add(self.document)
-            pages.append(self.document)
+            sibling = await self._sibling_control(target, info["name"], home)
+            if sibling is None:
+                break
+            switched = sibling["name"]
+            info = {**info, "name": sibling["name"], "tag": sibling["tag"]}
         self.last_collect = {"where": start, "control": info["name"], "pages": len(pages), "capped": capped}
+        how = (f'"{chosen}" loaded nothing new, so its document\'s own "{switched}" was followed instead' if switched
+               else "")
         more = (f' THE LIST IS NOT COMPLETE: this stopped at the limit of {limit} page(s) and "{info["name"]}" is '
                 "still there. Collect again from this page (a higher max_pages reads further) before you treat the "
                 "list as complete." if capped else "")
         if len(pages) == 1:
-            return (f"max_pages {limit} reads only the page you see." + more if capped
-                    else f'"{info["name"]}" led to no further page; the list is the page you see')
+            if capped:
+                return f"max_pages {limit} reads only the page you see." + more
+            if seen_dud:
+                return (f'"{info["name"]}" loaded nothing new (the page may show why); if the document says it has '
+                        "more pages, collect with its other paging control (a next-page link) or page through it")
+            return f'"{info["name"]}" led to no further page; the list is the page you see'
+        if switched:
+            how = " " + how + "."
         # A button may append rows in place rather than lead to a new page. Compare page bodies without generated
         # element ids or the changing paging control: both change between reads even when every earlier row remains.
         def body(page: str) -> str:
@@ -828,7 +913,7 @@ class Tab:
                              if not re.match(r'(?:button|link) "', line.strip()))
 
         bodies = [body(page) for page in pages]
-        grows = (len(pages) > 1 and info["tag"].upper() != "A"
+        grows = (len(pages) > 1 and info["tag"].upper() != "A" and not switched
                  and all(later.startswith(earlier) and len(later) >= len(earlier)
                          for earlier, later in zip(bodies, bodies[1:])))
         if grows:  # a "load more" control: the last page holds every row
@@ -837,8 +922,24 @@ class Tab:
                     + ("the rows loaded so far are on the page." + more if capped
                        else "the list is now complete on the page"))
         self.document = "\n".join(f"{PAGE_BREAK} {number} =====\n{page}" for number, page in enumerate(pages, 1))
-        return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one.{more} COLLECTED '
+        return (f'followed "{info["name"]}" through {len(pages)} page(s); you are on the last one.{how}{more} COLLECTED '
                 f"DOCUMENT (file it with keep if it is relevant):\n{without_ids(self.document)[:MAX_OBSERVATION * 2]}")
+
+    async def _sibling_control(self, target: str, name: str, home) -> dict | None:
+        """Another control of the same document (its frame first) that leads where the control labelled `name` was
+        meant to: see `_next_address`. None when there is none."""
+        frames = [frame for _, _, frame in self.frames]
+        frames.sort(key=lambda frame: frame is not home)
+        for frame in frames:
+            try:
+                found = await frame.evaluate(PAGERS_JS)
+            except Exception:  # noqa: BLE001
+                continue
+            for control in found:
+                label = clean_text(control.get("name") or "")[:80]
+                if label and label != name and not control.get("disabled") and _next_address(control.get("target") or "", target):
+                    return {"name": label, "tag": control.get("tag") or ""}
+        return None
 
     async def fetch(self, aid) -> str:
         """Download what the chosen link points to and read it as a document."""

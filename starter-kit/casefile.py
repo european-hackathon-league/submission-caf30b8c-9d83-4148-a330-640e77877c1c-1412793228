@@ -754,7 +754,8 @@ class CaseFile:
 
     def answer(self, question: str, status: str, note: str, agent: str | None = None) -> str:
         """An agent closes a question: its evidence is complete, or the thing does not exist."""
-        open_ids = {qid for qid, _ in self.questions()}
+        open_now = dict(self.questions())
+        open_ids = set(open_now)
         if question not in open_ids:
             return f'"{question}" is not an open question'
         if status not in ("complete", "absent"):
@@ -775,7 +776,10 @@ class CaseFile:
             if unknown:
                 return f"the technical data or status of {', '.join(unknown)} is not on file yet: file it before answering absent"
         if status == "complete" and question.split(":")[0] in ("positions", "revision", "requirements", "reserve", "material", "data"):
-            return "this question closes by itself once the facts are on file; file the missing evidence instead"
+            # with what is still missing: run dafda06b's agent answered "requirements complete" with 4 of 5 never
+            # filed, was told only to file "the missing evidence", and finished
+            return ("this question closes by itself once the facts are on file; file the missing evidence instead. "
+                    f"Still missing: {open_now[question]}")
         self.answers[question] = (status, note)
         self._bump()
         return f"question {question} closed as {status}"
