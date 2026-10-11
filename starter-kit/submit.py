@@ -376,6 +376,14 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         veto = guard(action) if guard is not None else None
         if veto:
             return veto
+        pressed = None
+        if action.get("do") == "click":  # its label on the page as last read (the ids of this turn)
+            pressed = next((m.group(3) for m in CONTROL.finditer(str(getattr(tender_tab, "document", "") or ""))
+                            if m.group(1) == str(action.get("id", "")).strip("[] ")), None)
+        if pressed and refused.get(pressed, 0) >= 2:
+            # Run 63f3be2e: "Position hinzufügen" pressed 10 times, refused each time ("not possible in this step").
+            return (f'blocked: the form refused "{pressed}" twice in this step. It is not the way on here: use the '
+                    "control that saves this step and moves on to the next one.")
         # Bounded: after two searches that found nothing the code may really be lost, and a fresh request is allowed.
         label = _label_of(action.get("id")) if action.get("do") == "click" else None
         if (sanity.enabled("single_code_request") and label and code_request["label"]
@@ -511,6 +519,14 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     def heading() -> str:
         left = int(deadline - time.time())
         text = f"YOUR JOB: enter, sign and submit the bid for tender {reference}, then read the confirmation."
+        # The position the form shows now, with its own values (run 63f3be2e: the clerk assumed the form starts with
+        # the first position of the sheet and typed another position's values into it).
+        every = [str(line["position"]) for line in sheet["positions"]]
+        shown = shown_position(str(getattr(tender_tab, "document", "") or ""), every, every)
+        if shown is not None:
+            line = next(l for l in sheet["positions"] if str(l["position"]) == shown)
+            text += (f"\nTHE FORM SHOWS POSITION {shown} NOW. Its values from the bid sheet: "
+                     + json.dumps(line, ensure_ascii=False))
         if codes:
             text += "\nCodes from the mailbox so far, oldest first: " + ", ".join(codes)
         if left < WRAP_UP:
@@ -546,6 +562,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                   max_steps=CLERK_STEPS, think=CLERK_THINKS, guard=clerk_guard,
                   circle_hint=CLERK_CIRCLE_HINT)
     chains: dict[str, list] = {}  # steps the clerk ran while the form showed each position (automatic replay)
+    refused: dict[str, int] = {}  # button label -> times the form answered it with a new alert, in this step
+    form_step = {"now": None}  # (page title, shown position) of the step the refusals belong to
 
     async def on_action(action: dict, before: str, result: str) -> str | None:
         """Automatic form replay, whatever the clerk's style (run 472732d2: single selects and clicks, no steps):
@@ -553,6 +571,25 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
         moves on to another bid position, that position's steps become the template (templatize; the model resolves
         only ambiguous fields) and code enters every further position (fill_positions)."""
         every = [str(line["position"]) for line in sheet["positions"]]
+        # the page after a click (this runs before the worker's own re-read); other actions do not change the step
+        after = await tender_tab.observe() if action.get("do") == "click" else str(getattr(tender_tab, "document", "") or "")
+
+        def step_of(page: str) -> tuple:
+            heading = next((l.strip() for l in page.splitlines() if l.lstrip().startswith("#")), "")
+            return heading, shown_position(page, every, every)
+
+        step_before, step_now = step_of(before), step_of(after)
+        if step_before != form_step["now"]:  # refusals belong to the step they happened in
+            form_step["now"] = step_before
+            refused.clear()
+        if action.get("do") == "click" and step_now == step_before and "(alert)" in after:
+            # pressed, still on the same step, and the page announces an alert: the form refused it
+            label = next((s["press"] for s in as_steps(action, before) if "press" in s), None)
+            if label:
+                refused[label] = refused.get(label, 0) + 1
+        elif step_now != step_before:  # the form moved on
+            form_step["now"] = step_now
+            refused.clear()
         position = shown_position(before, [p for p in every if p not in replayed], every)
         if position is None or time.time() > deadline - WRAP_UP:
             return None

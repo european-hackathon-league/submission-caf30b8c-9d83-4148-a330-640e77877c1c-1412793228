@@ -174,6 +174,23 @@ class AutomaticReplay(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("entered automatically", script.seen[1])
 
 
+class StayingInStep(unittest.IsolatedAsyncioTestCase):
+    async def test_each_turn_names_the_position_the_form_shows_and_its_values(self):
+        # run 63f3be2e: the clerk typed the sheet's first position into the form showing another one
+        form = PositionForm(order=("3", "1", "2"))
+        script = await run(form, [])
+        self.assertIn("THE FORM SHOWS POSITION 3 NOW", script.seen[0])
+        self.assertIn('"material_number": "M-3"', script.seen[0])
+
+    async def test_a_button_the_form_refuses_twice_is_blocked(self):
+        # run 63f3be2e: "Position hinzufügen" pressed 10 times, refused each time
+        form = PositionForm(refuse="1")
+        press = lambda aid: {"thought": f"save it ({aid})", "actions": [{"do": "click", "id": aid}]}
+        script = await run(form, [press(4), press(14), press(24)])
+        self.assertIn('the form refused "Weiter" twice', script.seen[3])
+        self.assertEqual(form.offset, 20)  # the third press never reached the form
+
+
 class LearningTheTemplate(unittest.TestCase):
     LINE = {"position": "1", "material_number": "M-1", "quantity": 4, "unit_price": "1906.85", "lead_time_weeks": 3,
             "surcharge_per_unit": "0.00", "rebate_total": "0.00", "material": {"bore_mm": 50, "certification": None}}
