@@ -18,7 +18,7 @@ import sanity
 from browser_env import Tab
 from calculator import Bid
 from preflight import Report, check as check_review
-from worker import ACTIONS_HELP, CONTROL, Agent
+from worker import ACTIONS_HELP, CONTROL, Agent, brief_for
 
 WRAP_UP = 150  # seconds before the deadline at which entering stops and signing starts: the code takes a while
 MAIL_BUDGET = 120  # seconds one request to the mailbox may take
@@ -529,7 +529,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
 
     bidder = {"company": context.get("company"), "vat_id": context.get("vat_id"), "email": context.get("email")}
     sheet = bid_sheet(bid)
-    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief, reference=reference,
+    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief_for(brief), reference=reference,
                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
                           sheet=json.dumps(sheet, ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
     if sanity.enabled("no_guessed_mailbox") and not bidder.get("email"):

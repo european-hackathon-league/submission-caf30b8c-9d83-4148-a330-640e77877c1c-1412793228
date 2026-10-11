@@ -60,6 +60,23 @@ Reading the page:
   after a session expires, log in again. Surveys, tools and help pages lead away from your task.
 """
 
+# The investigators' action list without the steps action (a form chain only the bid clerk needs): ~900 characters
+# less in every investigator call, and input tokens are most of a run's cost.
+ACTIONS_HELP_RESEARCH = (ACTIONS_HELP[:ACTIONS_HELP.index('  {"do": "steps"')]
+                         + ACTIONS_HELP[ACTIONS_HELP.index('  {"do": "done"'):])
+CREDENTIAL_LINE = re.compile(r"(?im)^[^\n]*\b(?:password|passwort|kennwort|username|benutzername)\b\s*:[^\n]*\n?")
+
+
+def brief_for(brief: str, *, drop_sections: tuple[str, ...] = ()) -> str:
+    """The brief as an agent's prompt carries it: without login credentials (code logs in; the model never needs a
+    password, and it is safer not to repeat it in every call), and without the sections whose heading names one of
+    `drop_sections` (e.g. how to submit, for the investigators). A brief without such headings is kept whole."""
+    text = CREDENTIAL_LINE.sub("", brief)
+    for word in drop_sections:
+        text = re.sub(rf"(?ims)^(#+)[^\n]*{word}[^\n]*\n.*?(?=^#{{1,2}}\s|\Z)", "", text)
+    return text
+
+
 STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung page must not freeze the whole run
 READ_TIMEOUT = 20  # seconds for one page read (a healthy read takes under a second); then Agent._recover
 NAV_BUDGET = 2 * 8 + 12 + 6  # one goto: two answer waits, the build wait, settling (browser_env NAV_COMMIT/NAV_LOAD)
