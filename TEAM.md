@@ -30,7 +30,7 @@ faster and up to 64 Qwen calls can run at once.
 
 **Fix line for the evals:** f4e04d2 (pressure optional in matching, quantity change by mail, plain stock figure) → 568b228 (approval registers, change notices, governing revision) → **d6d6979** (a requirement without a pressure is matched at all: 8d1f0b5 still scored 0 on variant A because the calculator skipped such requirements as incomplete; with the fixes before it, quantity 20→24, stock and discount were already right) on `maria/escalation`; merged into `maria/cost` = **a7ed41c**. All tests pass (incl. an end-to-end test from filed facts to the bid), golden check exact. **a7ed41c running on variant A ×2 and variant B ×2 (05:02 UTC).**
 
-**Since then:** a7ed41c scores **100 on variant A** (from 0) and 100 on public-1 (a176359f, f851d41). New: **b57394a** (cost) / clerk turn reserve on escalation. Next: revision-id normalisation + variant B brief with a scenario date, then both evals again. **Done (05:16 UTC):** revision ids compared loosely ("Revision 2" = "2"), commit ce0d803 on escalation, merged → `maria/cost` **1d0ecea**; variant B's brief got a scenario date (new eval version). Running: 1d0ecea on variant B ×2 and variant A ×1.
+**Since then:** a7ed41c scores **100 on variant A** (from 0) and 100 on public-1 (a176359f, f851d41). New: **b57394a** (cost) / clerk turn reserve on escalation. Next: revision-id normalisation + variant B brief with a scenario date, then both evals again. **Done (05:16 UTC):** revision ids compared loosely ("Revision 2" = "2"), commit ce0d803 on escalation, merged → `maria/cost` **1d0ecea**; variant B's brief got a scenario date (new eval version). Running: 1d0ecea on variant B ×2 and variant A ×1. **05:50 UTC: platform failure** took down every running run (public and eval); public runs were retried by Atira, the two eval runs of 8c44dad restarted by Maria (75e4eb18 on A, 4cfdb597 on B).
 
 ### Open problems
 
@@ -254,9 +254,9 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
 | 05:36 | **run_76dc3099** | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | **100** | ✅ | 8 min | 237 / $0.24 | Public check 4 |
-| 05:48 | run_34a51556 | Maria | `maria/cost` **8c44dad** (+ **form replay** `fill_positions`: one position by hand, code fills the rest) | running | | | | Public check 2 |
-| 05:47 | run_4b369143 | Maria | `maria/cost` **8c44dad** (+ **form replay** `fill_positions`: one position by hand, code fills the rest) | running | | | | Public check 1: fewer clerk turns, no loop? |
-| 05:36 | run_e585d778 | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | running | | | | Public check 3 |
+| 05:48 | run_34a51556 → retry run_359201e8 | Maria | `maria/cost` **8c44dad** (+ **form replay** `fill_positions`: one position by hand, code fills the rest) | **– (platform failure at 05:50)**; retry running | | | | Public check 2 |
+| 05:47 | run_4b369143 → retry run_10b8b777 | Maria | `maria/cost` **8c44dad** (+ **form replay** `fill_positions`: one position by hand, code fills the rest) | **– (platform failure at 05:50)**; retry running | | | | Public check 1: fewer clerk turns, no loop? |
+| 05:36 | run_e585d778 → retry run_415c1867 | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | **– (platform failure at 05:50)**; retry running | | | | Public check 3; Atira restarted it |
 | 05:19 | **run_1470dade** | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | **100** | ✅ | ~12 min | 221 / $0.24 | Public check 2: no regression on public-1 |
 | 05:12 | **run_f402181d** | Vamshidhar | package 35eb499d = `maria/escalation` **fc54a43** | **100** | ✅ | 10 min | 249 / $0.29 | |
 | 04:55 | **sub_902fc357 (SUBMISSION, promoted by the organisers)** | Organisers | test run a176359f = `maria/cost` **f851d41** (package 2c82a7bf) | **100** | ✅ | 6:15 | 192 / $0.176 | **Now our final package.** Leaderboard: #7, $0.176, 6:15 |
