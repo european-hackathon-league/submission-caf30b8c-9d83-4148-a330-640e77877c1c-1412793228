@@ -127,8 +127,21 @@ CONTEXT_SHAPE = """From the task brief, as JSON:
  "erp_site": "<the id, from the list of this run's websites, of the company's ERP or inventory system (materials, stock, price conditions)>",
  "authorized_senders": {"discount_approval": "<mailbox local part the brief authorizes for discount approvals>",
    "condition_rules": "...", "price_indices": "...", "tech_release": "...", "packaging_tariffs": "...",
-   "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."}}
-The local part is what stands before the @; null for a topic the brief names no sender for."""
+   "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."},
+ "authorized_subjects": {"discount_approval": "<the subject word the brief names for these messages>",
+   "condition_rules": "...", "price_indices": "...", "tech_release": "...", "packaging_tariffs": "...",
+   "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."},
+ "mail_search_hint": "<the brief's own advice on how to search the mailbox, in one short sentence, or null>"}
+The local part is what stands before the @; null for a topic the brief names no sender for. A subject word is the
+message subject or document name the brief gives for that topic (for example in a list of subject/sender pairs, or
+"the latest <subject> message"), copied exactly as written, without the tender reference; null when the brief names
+none."""
+
+# The open questions that ask for a mail record, by question id prefix, and the brief's topic that authorizes it.
+MAIL_QUESTION_TOPICS = {"discount": "discount_approval", "condition_group": "condition_rules",
+                        "packaging_tariff": "packaging_tariffs", "delivery_commitment": "delivery_release",
+                        "setup_pool": "setup_pools", "project_bonus": "project_bonus", "index": "price_indices",
+                        "fx": "fx_fixing", "reserve": "tech_release"}
 
 _PIECE_UNITS = {"stk", "stk.", "st", "st.", "stück", "stueck", "pc", "pcs", "pcs.", "piece", "pieces", "ea", "each", "einzelstück", "einzelstueck"}
 _SET_UNITS = {"satz", "sätze", "saetze", "set", "sets", "kit", "kits"}
@@ -290,6 +303,10 @@ class CaseFile:
         self.vat_id = _text(context.get("vat_id")) or ""
         senders = context.get("authorized_senders") or {}
         self.senders = {topic: (_text(senders.get(topic)) or "").split("@")[0].lower() for topic in TOPICS}
+        subjects = context.get("authorized_subjects")
+        subjects = subjects if isinstance(subjects, dict) else {}
+        self.subjects = {topic: self._subject_word(subjects.get(topic)) for topic in TOPICS}
+        self.mail_hint = _text(context.get("mail_search_hint")) or ""
         self.mailbox: str | None = None
         self.positions: dict[str, dict] = {}
         self.clarifications: dict[str, dict] = {}
@@ -661,6 +678,59 @@ class CaseFile:
 
     # ---- what is still unknown -------------------------------------------------------------------------------
 
+    def _subject_word(self, value) -> str:
+        """The subject word the model read from the brief for one topic, without the tender reference (the search
+        hint adds it) and without quotes the model may have copied around it."""
+        if isinstance(value, list):
+            value = next((item for item in value if _text(item)), None)
+        text = _text(value) if isinstance(value, (str, int, float)) else None
+        if not text:
+            return ""
+        if self.reference:
+            text = re.sub(re.escape(self.reference), " ", text, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", text).strip(" \"'„“”«»:-–—") or ""
+
+    def mail_search(self, topic: str) -> str:
+        """Where the brief says a topic's record is found: the words to search and the authorized sender. Sandbox
+        runs 9ac58b69, 472732d2 and 63f3be2e: without the brief's subject word the mail agent guessed search words,
+        and a guess that finds nothing was repeated up to 10 times (mail search combines its words with AND)."""
+        subject, sender = self.subjects.get(topic, ""), self.senders.get(topic, "")
+        words = f"{self.reference} {subject}".strip() if subject else ""
+        domain = self.mailbox.partition("@")[2] if self.mailbox and "@" in self.mailbox else ""
+        parts = [f"Search words: {words}" if words else
+                 f"Search words: {self.reference} plus a subject word from the brief".strip()]
+        if sender:
+            parts.append(f"authorized sender: {sender}@{domain or '<bidder mailbox domain>'}")
+        parts.append("look in the inbox and the archive")
+        return "; ".join(parts)
+
+    def mail_checklist(self, questions: list[tuple[str, str]]) -> str:
+        """One view of every mail record still needed, by topic, so that the mail agent can plan its searches
+        instead of meeting the topics one question at a time. Empty when no mail record is asked for."""
+        wanted: dict[str, list[str]] = {}
+        for qid, _ in questions:
+            prefix, _, key = qid.partition(":")
+            topic = MAIL_QUESTION_TOPICS.get(prefix)
+            if topic:
+                wanted.setdefault(topic, [])
+                if key:
+                    wanted[topic].append(key)
+        if not wanted:
+            return ""
+        lines = ["MAIL CHECKLIST: every mail record still needed, one line per topic, with the subject word and "
+                 "sender the brief prescribes. Plan before you search: one search per subject word (or one search "
+                 "on the reference alone, read page by page), then open each hit and file it with keep, or several "
+                 "hits of one result list with file_each. One message often defines several keys. A search that "
+                 "finds nothing is not repeated with the same words: change the words or the folder."]
+        if self.mail_hint:
+            lines.append(f"The brief on mail search: {self.mail_hint}")
+        for topic in TOPICS:
+            if topic in wanted:
+                keys = sorted(set(wanted[topic]))
+                lines.append(f"- {topic.replace('_', ' ')}" + (f" ({', '.join(keys)})" if keys else "")
+                             + f": {self.mail_search(topic)}")
+        return "\n".join(lines)
+
     def questions(self) -> list[tuple[str, str]]:
         """The open questions, derived from the brief's rules and the facts on file: id and what to find."""
         facts = self.inputs()
@@ -694,7 +764,8 @@ class CaseFile:
                                     "pressure, mounting, certification, catalogue group, pieces per set.")
         for ref, key in waiting.items():
             ask(f"reserve:{ref}", f"The technical release for specification revision {facts.governing} that gives the "
-                                  f"per-end reserve ({key}): requirement {ref} states a usable travel.")
+                                  f"per-end reserve ({key}): requirement {ref} states a usable travel. "
+                                  f"{self.mail_search('tech_release')}.")
         assigned, _ = merged_assignments(answers)
         quantities, _ = final_quantities(facts.positions, answers, needs)
         matched: dict[str, Material] = {}
@@ -727,7 +798,8 @@ class CaseFile:
                                                f"{'; '.join(gaps)}.")
         if facts.authorities.discount_percent is None:
             ask("discount", f"The sales director's most recent discount approval for exactly {self.reference} (inbox and "
-                            "archive). File the message; answer absent if no approval exists.")
+                            "archive). File the message; answer absent if no approval exists. "
+                            f"{self.mail_search('discount_approval')}.")
         labels = {"condition_group": ("the condition rules message", facts.authorities.clauses),
                   "packaging_tariff": ("the packaging tariffs message", facts.authorities.tariffs),
                   "delivery_commitment": ("the delivery release message", facts.authorities.commitments),
@@ -741,15 +813,18 @@ class CaseFile:
                     need = needs.get(next((p.requirement_ref for p in facts.positions if p.position == position), ""))
                     if kind == "delivery_commitment" and need is not None and need.ref in matched:
                         extra = f" (the position's material is {matched[need.ref].number})"
-                    ask(f"{kind}:{key}", f"For {self.reference}: {label} that defines {key}, assigned to position {position}{extra}.")
+                    ask(f"{kind}:{key}", f"For {self.reference}: {label} that defines {key}, assigned to position {position}{extra}. "
+                                         f"{self.mail_search(MAIL_QUESTION_TOPICS[kind])}.")
         for material in matched.values():
             if material.index_code and material.index_code not in facts.authorities.index_rates:
                 ask(f"index:{material.index_code}", f"For {self.reference}: the latest price index message with the rate of "
-                                                    f"{material.index_code} (material {material.number}).")
+                                                    f"{material.index_code} (material {material.number}). "
+                                                    f"{self.mail_search('price_indices')}.")
             for condition in material.conditions:
                 if condition.valid_on(self.scenario) and condition.currency != "EUR" and (condition.fx_key or "") not in facts.authorities.fx:
                     ask(f"fx:{condition.fx_key}", f"For {self.reference}: the FX fixing message with the rate of "
-                                                  f"{condition.fx_key} ({condition.currency}, material {material.number}).")
+                                                  f"{condition.fx_key} ({condition.currency}, material {material.number}). "
+                                                  f"{self.mail_search('fx_fixing')}.")
         return found
 
     def answer(self, question: str, status: str, note: str, agent: str | None = None) -> str:
@@ -827,4 +902,4 @@ async def read_context(brief: str) -> dict:
     """The tender's identity and the brief's sender rules, read from the brief by the model."""
     return await llm.chat_json([{"role": "system", "content": "You read a task brief and return facts from it as JSON."},
                                 {"role": "user", "content": f"{CONTEXT_SHAPE}\n\nTASK BRIEF\n{brief}"}],
-                               think=True, max_tokens=1500, label="context")
+                               think=True, max_tokens=3000, label="context")
