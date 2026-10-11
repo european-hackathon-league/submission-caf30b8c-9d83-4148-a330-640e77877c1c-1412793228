@@ -703,16 +703,67 @@ class CaseFile:
 
     def _authorized(self, row: dict, topic: str) -> bool:
         """The brief's test for a record: exact tender reference, authorized sender, not after the scenario date."""
+        return not self._rejection(row, topic)
+
+    def _rejection(self, row: dict, topic: str) -> str:
+        """Why a filed message does not count as a record of `topic` ("" when it does)."""
         sender = (_text(row.get("sender")) or "").lower()
         local, _, domain = sender.partition("@")
         if self.senders.get(topic) and local != self.senders[topic]:
-            return False
+            return f"sender {sender or '?'} is not the authorized one"
         if self.mailbox and domain and domain != self.mailbox.lower().partition("@")[2]:
-            return False
-        if (_text(row.get("tender_reference")) or "").upper() != self.reference.upper():
-            return False
+            return f"sender domain {domain} is not the bidder's"
+        reference = _text(row.get("tender_reference")) or ""
+        if reference.upper() != self.reference.upper():
+            return f"reference {reference or 'none'} is not exactly {self.reference}"
         when = parse_when(row.get("timestamp"))
-        return when is None or when <= self.scenario
+        if when is not None and when > self.scenario:
+            return f"dated {row.get('timestamp')}, after the scenario date"
+        return ""
+
+    def _record_on_file(self, question: str, authorities: Authorities) -> bool | None:
+        """For a question whose evidence is an authorized mail record for one key: whether the case file holds a
+        valid record for it (the test `questions()` asks by). None for every other question."""
+        prefix, _, key = question.partition(":")
+        stores = {"index": authorities.index_rates, "fx": authorities.fx, "reserve": None,
+                  "delivery_commitment": authorities.commitments, "condition_group": authorities.clauses,
+                  "packaging_tariff": authorities.tariffs, "setup_pool": authorities.pools,
+                  "project_bonus": authorities.bonus}
+        if prefix == "discount" and not key:
+            return authorities.discount_percent is not None
+        if prefix not in stores:
+            return None
+        if prefix == "reserve":  # keyed by the requirement; the reserve key it waits for is checked by questions()
+            return False
+        return key in stores[prefix]
+
+    def _record_refusal(self, question: str) -> str:
+        """The refusal of "complete" for a record question with no valid record on file, naming the filed messages
+        of the topic that were rejected and why (run b462cdb3: only a decoy with a suffixed reference was filed and
+        the agent closed the index question as complete)."""
+        prefix, _, key = question.partition(":")
+        topic = MAIL_QUESTION_TOPICS[prefix]
+        block = "discount" if topic == "discount_approval" else topic
+        what = key or "the discount approval"
+        rejected, unused = [], []
+        for row in self.messages.values():
+            if not (row.get(block) or row.get("topic") == topic):
+                continue
+            name = f"\"{row.get('subject')}\" from {row.get('sender')} at {row.get('timestamp')}"
+            why = self._rejection(row, topic)
+            if why:
+                rejected.append(f"{name} ({why})")
+            else:
+                unused.append(name)
+        text = (f"not resolved: the case file has no valid record for {what} (only records for other "
+                f"references/senders or none were filed): open the message for exactly {self.reference} from the "
+                "authorized sender and file it")
+        if rejected:
+            text += ". Filed but rejected: " + "; ".join(rejected[:6])
+        if unused:
+            text += (f". Filed and authorized, but defining no valid {what} (another key, or not valid on the "
+                     "scenario date): " + "; ".join(unused[:6]))
+        return text + ". Answer absent only if the inbox and the archive hold no such record."
 
     def authorities(self) -> Authorities:
         result = Authorities()
@@ -1119,7 +1170,11 @@ class CaseFile:
                 return "no material of that catalogue group is on file yet: search the group and file its materials first"
             if unknown:
                 return f"the technical data or status of {', '.join(unknown)} is not on file yet: file it before answering absent"
-        if status == "complete" and question.split(":")[0] in ("positions", "revision", "requirements", "reserve", "material", "data"):
+        if status == "complete" and self._record_on_file(question, self.inputs().authorities) is False:
+            # run b462cdb3: the mail agent closed index:<code> as complete with only a decoy ("<ref>-A") filed; the
+            # metal index was then missing on every position and no open question said so
+            return self._record_refusal(question)
+        if status == "complete" and question.split(":")[0] in ("positions", "revision", "requirements", "material", "data"):
             # with what is still missing: run dafda06b's agent answered "requirements complete" with 4 of 5 never
             # filed, was told only to file "the missing evidence", and finished
             return ("this question closes by itself once the facts are on file; file the missing evidence instead. "
