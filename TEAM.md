@@ -2,7 +2,46 @@
 
 EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 11 Oct 2026, 04:00 UTC (06:00 Berlin).
 
-## Where we stand (11 Oct, 04:00 UTC)
+## Where we stand (11 Oct, after the sprints; scrum-master analysis 07:40 UTC + later results)
+
+| | |
+|---|---|
+| **Final package** | still **sub_902fc357 = f851d41** (100 on public, $0.176, 6:15; leaderboard **#10**). It **scores 0 on eval B** (and its predecessor 0 on eval A). Resubmitting cannot cost rank (best submission holds the place); only the private run gains |
+| **Best-tested candidates** | **8c44dad**: evals A 100/100, B 100/100, public 2/2 at 100. **ccf5612**: public 100/100 (6.5 and 8 min), eval A 100, eval B 0 = eval bug (TAN mail dated today) + clerk gaps, rerun on the fixed eval pending. **c47a3ce**: public 100 (10 min), eval A 100 |
+| **Newest head** | `maria/cost` **991689d** = sprints A-E (ERP walk learning, paged filing + done gate, mail checklist, `path` action, context gates + token budget 1.1 M). In test |
+| **Running sprints** | **F** mail coverage (every prescribed subject searched; mail questions routed firmly; FX early) · **G** clerk: skip the rest of a turn after a refused action, "submitted" only with the portal's confirmation, replay learns "no certificate" as a placeholder |
+| **Test runs ordered** | public: ccf5612, 8c44dad, 991689d (one each, then a second each); evals: 991689d A/B, ccf5612 B on the fixed eval (variant B redeployed 11 Oct: TAN mail dated on the scenario date) |
+| **Decision for Maria + Vamshidhar** | resubmit **8c44dad** now (insurance), then the best of ccf5612 / 991689d+F+G once proven (≥3 valid public runs with ≥2 at 100 and evals A and B at 100) |
+
+### Status of the problems
+
+| Problem | Status |
+|---|---|
+| Clerk loops on the bid form | ✅ closed in practice: 0 clerk misses in the runs since 8c44dad (form replay, stays-in-step, refused-button block) |
+| Final package fails the evals | 🟥 code fixed (1d0ecea, 8c44dad), package not: needs a resubmit |
+| Mail coverage (72e78b8e 42.1, 65a5d83b 38.2: Technikfreigabe/Devisenfixing never searched, reserve questions bounced) | 🟨 8d82ad6 (checklist) merged; Sprint F running |
+| Paged spec, only the last page filed (dafda06b 29.1) | 🟨 28d06f9 merged, in test |
+| Signing with an empty code / "submitted" without confirmation (eval B) | 🟨 Sprint G running |
+| Tokens per run 1.6-2.1 M vs target 1.1 M | 🟨 991689d (gates + budget) in test; mail access check relocks (~23 mail turns, ~0.3 M tokens) and `path` unused (0×) are next |
+| run_0eac78c0 "running" > 45 min | platform hang: report to the organisers |
+
+### Backlog (scrum master, prioritised)
+
+| P | Task | Done when |
+|---|---|---|
+| P0 | **Insurance resubmit 8c44dad** (Maria's go) | newer sub_ passed review is the latest |
+| P0 | Merge F and G, test the head (public ×3, evals A/B) | ≥2 of 3 public at 100, A and B at 100 → **second resubmit** (Maria's go) |
+| P1 | Process: find the cut-off time; last resubmit ≥ 60 min before the end; no test runs of eval-failing packages near the end (a promoted test run becomes the final); align with Vamshidhar (`opencode/batch-nudge` restores the f851d41 package) | rule agreed |
+| P1 | README: current design and how each helper maps to rule 11 (elegance, AI review) | README updated |
+| P1 | Mail access check relocking: fewer turns per unlock | mail ≤ 30 turns |
+| P1 | Eval variant C: the full rule set on invented pages | candidate ≥ 90 |
+| P1 | Pitch (Iga, Ravindra) | draft reviewed |
+| P2 | Agents start during the context call; `FULL_TURNS=0` measured; OCR for scanned PDFs | measured |
+
+### Do not redo (rejected, with reasons)
+Global call cap (costs quality; the clerk turn reserve is the safe form) · ERP route compiler / local parsers (rule 11, other software) · code ranking and opening mails (the model must choose documents) · scripted submission state machine · the fixed script (37a4414) · model-written shorter brief (28% shorter, +12 s) · planning around prompt caching (unreliable) · one extraction call per domain (5% of tokens) · flat 8 s timeout · manual `fill_positions` relying on the model · resubmitting main (d72deb8) or the f851d41 line.
+
+## Earlier overview (11 Oct, 04:00 UTC; superseded by the section above)
 
 | | |
 |---|---|
