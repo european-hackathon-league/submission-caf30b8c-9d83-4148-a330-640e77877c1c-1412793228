@@ -27,7 +27,7 @@ from browser_env import Tab
 from calculator import calculate_bid
 import sanity
 import validate
-from casefile import SHAPES, CaseFile, brief_intro, brief_rules, brief_site_lines, read_context, status_sections
+from casefile import SHAPES, CaseFile, brief_intro, brief_rules, brief_site_lines, mail_topic, read_context, status_sections
 from gates import Gates
 from worker import ACTIONS_HELP, ACTIONS_HELP_RESEARCH, CONTROL, Agent, brief_for, find_control
 
@@ -211,7 +211,9 @@ class Team:
         is idle are its own work (it is woken for them), so only the ones open when it went idle are candidates."""
         if self.case.pending or site_role(name) is None:
             return
-        still = {qid for qid, _ in self.case.questions()} & candidates
+        # A mail record whose website is known stays with that website's agent (run 72e78b8e: the reserve questions
+        # were released, the ERP agent sent them back to the mail site, and nobody searched for them).
+        still = {qid for qid, _ in self.case.questions() if not question_owner(qid)} & candidates
         fresh = still - RELEASED
         if fresh:
             RELEASED.update(fresh)
@@ -615,12 +617,21 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         DONE_REFUSALS times per question, never while its own documents are being read or near the deadline."""
         if not sanity.enabled("done_gate") or case.pending_for(name) or deadline - time.time() < DONE_GATE_SECONDS:
             return None
+        # A mail record whose website is this one is this agent's work whether or not it filed anything for it yet
+        # (run 72e78b8e: the mail agent finished with the reserve questions open, never having searched for them).
         mine = [(qid, text) for qid, text in questions_for_site(name, case.questions())
-                if filed_kinds & set(QUESTION_KINDS.get(qid.split(":", 1)[0], ())) and refused.get(qid, 0) < DONE_REFUSALS]
+                if (filed_kinds & set(QUESTION_KINDS.get(qid.split(":", 1)[0], ()))
+                    or same_site(question_owner(qid), name)) and refused.get(qid, 0) < DONE_REFUSALS]
         if not mine:
             return standing_refusal()
         for qid, _ in mine:
             refused[qid] = refused.get(qid, 0) + 1
+        if any(same_site(question_owner(qid), name) for qid, _ in mine):
+            return ("not finished: these records are kept on your website and are still open:\n"
+                    + "\n".join(f"- [{qid}] {text}" for qid, text in mine)
+                    + "\nNo other agent can find them. Search each with the search words given, in every folder that "
+                      "can hold it (inbox and archive), open the hits and file them. Answer a question absent only "
+                      "when that search finds nothing.")
         return ("not finished: you filed evidence for these questions and they are still open:\n"
                 + "\n".join(f"- [{qid}] {text}" for qid, text in mine)
                 + "\nThe case file does not have what they name yet. If you read it on pages you did not file, go back "
@@ -634,8 +645,8 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         """Gates on: the agent's first done is refused once with its standing job (the lean prompt has no brief
         rules, and open questions alone do not cover every world), and a second one while nothing is filed from its
         website or a question its website could answer is open. Such a refusal raises the gate (more context)."""
-        if gates.full() or standing_refused[0] >= STANDING_REFUSALS or budget_used() >= BUDGET_NEAR:
-            return None
+        if gates.full() or standing_refused[0] >= STANDING_REFUSALS or budget_used() >= BUDGET_NEAR or refused:
+            return None  # (`refused`: the question gate already sent it back with named work: no second sermon)
         open_here = answerable_here(name, case.questions())
         if standing_refused[0] and filed_kinds and not open_here:
             return None
@@ -676,6 +687,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
 
     async def note_walk(action: dict, page_before: str, result: str) -> None:
         walks.browsed(action, page_before, tab.page.url)
+        note_search(case, name, action)
         return None
 
     agent.on_action = note_walk
@@ -695,6 +707,8 @@ SITE_ROLES: dict[str, str] = {}
 # from then on. The routing assumes the public split of facts (materials in the ERP, keys and approvals in the mail);
 # the private dataset may split them differently, and a routed question must not end up with nobody to answer it.
 RELEASED: set[str] = set()
+# Per topic of the brief: the website it keeps that topic's records on when it is not the mailbox (record_sites).
+TOPIC_SITES: dict[str, str] = {}
 # Per website: the record walk its agent learned (WalkRecorder), offered as a file_each action in its briefing.
 WALKS: dict[str, WalkRecorder] = {}
 
@@ -709,24 +723,59 @@ def site_role(site_id: str) -> str | None:
     return None
 
 
+def same_site(owner: str, site_id: str) -> bool:
+    return bool(owner) and owner.casefold() == site_id.casefold()
+
+
+def question_owner(qid: str) -> str:
+    """The website whose agent alone works a question whose evidence is a mail record: the website the brief keeps
+    that topic's records on (record_sites, e.g. an approval register in the ERP), else the mail website read from
+    the brief. "" for any other question, or when the brief names no mail website (then the routing by site name and
+    the release to every agent apply as before)."""
+    topic = mail_topic(qid)
+    if topic is None:
+        return ""
+    return (TOPIC_SITES.get(topic) if topic else "") or SITE_ROLES.get("mail") or ""
+
+
 def questions_for_site(site_id: str, questions: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """Keep specialized mail and ERP agents on questions their portal can resolve (from Vamshidhar's v1 package,
-    sandbox run 44a626ef: 100 in 9.6 min, every agent finished by itself)."""
+    sandbox run 44a626ef: 100 in 9.6 min, every agent finished by itself). A mail record goes to its owner only
+    (question_owner), never to another website by the release."""
     site = site_id.casefold()
 
     def plays(role: str) -> bool:
         named = (SITE_ROLES.get(role) or "").casefold()
         return site == named if named else role in site
 
-    if plays("erp"):
-        prefixes = ("material:", "data:")
-        return [(qid, text) for qid, text in questions if qid.startswith(prefixes) or qid in RELEASED]
-    if plays("mail"):
-        prefixes = ("condition_group:", "packaging_tariff:", "delivery_commitment:", "setup_pool:",
-                    "project_bonus:", "index:", "fx:", "reserve:")
-        return [(qid, text) for qid, text in questions
-                if qid in ("mailbox", "discount") or qid.startswith(prefixes) or qid in RELEASED]
-    return questions
+    mine = []
+    for qid, text in questions:
+        owner = question_owner(qid)
+        if owner:
+            if same_site(owner, site_id):
+                mine.append((qid, text))
+        elif plays("erp"):
+            if qid.startswith(("material:", "data:")) or qid in RELEASED:
+                mine.append((qid, text))
+        elif plays("mail"):
+            if mail_topic(qid) is not None or qid in RELEASED:
+                mine.append((qid, text))
+        elif not qid.startswith("search:"):  # one search per topic is the mailbox agent's work only
+            mine.append((qid, text))
+    return mine
+
+
+def note_search(case, site_id: str, action: dict) -> None:
+    """What the mail agent typed into a search (or an address with a query it opened) goes to the case file, which
+    ticks off the prescribed topics it names. Code never searches by itself (rule 11): it only notes the model's
+    searches."""
+    owner = SITE_ROLES.get("mail") or ""
+    if not (same_site(owner, site_id) if owner else site_role(site_id) == "mail"):
+        return
+    do = action.get("do")
+    text = action.get("text") if do == "fill" else unquote_plus(str(action.get("url") or "")) if do == "goto" else ""
+    if text and hasattr(case, "note_search"):
+        case.note_search(str(text))
 
 
 async def open_tabs(playwright, sites: list[dict]) -> tuple[list, dict[str, Tab]]:
@@ -761,9 +810,13 @@ async def solve(task: dict, playwright) -> dict | None:
     SITE_ROLES.update({role: str(context.get(f"{role}_site") or "") for role in ("erp", "mail")
                        if str(context.get(f"{role}_site") or "") in {site["siteId"] for site in sites}})
     case = CaseFile(brief, context)
+    TOPIC_SITES.clear()
+    TOPIC_SITES.update({topic: site for topic, site in case.record_sites.items()
+                        if site in {entry["siteId"] for entry in sites} and site != SITE_ROLES.get("mail")})
+    case.record_sites = dict(TOPIC_SITES)
     print(f"Sanity checks on: {', '.join(sanity.active()) or 'none'}", flush=True)
     print(f"Context: tender {case.reference}, scenario {case.scenario.isoformat()}, company {case.company}, "
-          f"senders {case.senders}, subjects {case.subjects}", flush=True)
+          f"senders {case.senders}, subjects {case.subjects}, kept elsewhere {TOPIC_SITES or 'none'}", flush=True)
     print(f"Context gates {'on' if Gates().enabled else 'off (full context every turn)'}; token budget "
           f"{token_budget() or 'off'}", flush=True)
 

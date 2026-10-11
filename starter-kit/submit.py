@@ -17,7 +17,7 @@ from decimal import Decimal
 import llm
 import sanity
 from browser_env import Tab
-from calculator import Bid
+from calculator import NO_CERTIFICATE, Bid
 from preflight import Report, check as check_review
 from worker import ACTIONS_HELP, CONTROL, Agent, brief_for
 
@@ -178,6 +178,9 @@ How to work
   block marked "not sent", that say nothing about the message itself: a code mail in the inbox from the portal is a
   received message even if such a section inside it says otherwise. When several code mails match, the one with the
   highest request or sequence number is the newest; take its code without waiting for a "better" one.
+- Dates in the mailbox may not match your sense of "now". If the newest matching code mail looks old by its date,
+  still open it and answer with its code (unless it is one of the answers you already gave): an empty answer is
+  worse than a code the portal may reject.
 - Lists can be paged, sorted either way and split over folders, and new mail may only show after a reload. If the
   message is not there yet, reload and look again a few times.
 - Log in again if the webmail asks.
@@ -187,6 +190,23 @@ How to work
 
 
 PLACEHOLDER = re.compile(r"\{(\w+)(?:\|([^}]*))?\}")
+CERTIFICATE_LABEL = re.compile(r"certif|zertif|certyfik", re.I)
+
+
+def no_certificate(value) -> bool:
+    """A certification value that means "none required", however it is written (calculator.NO_CERTIFICATE)."""
+    if value is None:
+        return True
+    return re.sub(r"\s+", " ", str(value).strip().lower()).strip(" .—–") in NO_CERTIFICATE
+
+
+def _line_values(line: dict, drop: tuple[str, ...] = ("material",)) -> dict:
+    """A bid-sheet line's own values and its material's, with a "no certificate" written as text read as null: the
+    form has a word of its own for it, which the template carries ({certification|none=<word>})."""
+    values = {**(line.get("material") or {}), **{k: v for k, v in line.items() if k not in drop}}
+    if "certification" in values and no_certificate(values["certification"]):
+        values["certification"] = None
+    return values
 
 
 def fill_template(template: list, line: dict) -> list:
@@ -194,7 +214,7 @@ def fill_template(template: list, line: dict) -> list:
     {name} becomes that bid-sheet line's value (its own fields and its material's), "{name|de}" with a decimal comma,
     "{name|none=<text>}" with <text> when the value is null. A field step whose value is null and has no none= text
     is left out: an unknown value leaves its field empty, as the bid sheet says."""
-    values = {**(line.get("material") or {}), **{k: v for k, v in line.items() if k != "material"}}
+    values = _line_values(line)
     steps = []
     for step in template:
         if not isinstance(step, dict):
@@ -263,7 +283,7 @@ def templatize(steps: list, line: dict) -> tuple[list, list[tuple[int, str, list
     does not have, typed for a position whose certification is null, is the form's word for "no certificate".
     Returns the template and the ambiguous fields (index, label, candidate placeholders): a value that equals two
     fields (0.00 for surcharge and rebate) is not guessed here (resolve_template asks the model)."""
-    values = {**(line.get("material") or {}), **{k: v for k, v in line.items() if k not in ("material", "position")}}
+    values = _line_values(line, drop=("material", "position"))
     forms: dict[str, set[str]] = {}
     for key, value in values.items():
         if value is None:
@@ -288,9 +308,16 @@ def templatize(steps: list, line: dict) -> tuple[list, list[tuple[int, str, list
         else:
             unmatched.append(len(template))
             template.append(step)
-    if len(unmatched) == 1 and "certification" in values and values["certification"] is None:
-        index = unmatched[0]
-        template[index] = {**template[index], "value": "{certification|none=" + template[index]["value"] + "}"}
+    if "certification" in values and values["certification"] is None:
+        # The form's word for "no certificate" must stay a placeholder: learned literally, a position that needs a
+        # certificate was replayed with "no certificate" (runs faa828e4, 6d30dbd4, 74e84e70). The field is the one
+        # labelled as a certificate, else the one whose value says "none", else the only value the sheet lacks.
+        labelled = [i for i in unmatched if CERTIFICATE_LABEL.search(str(template[i].get("field", "")))]
+        saying_none = [i for i in unmatched if no_certificate(template[i]["value"])]
+        chosen = next((group for group in (labelled, saying_none, unmatched) if len(group) == 1), None)
+        if chosen:
+            index = chosen[0]
+            template[index] = {**template[index], "value": "{certification|none=" + template[index]["value"] + "}"}
     return template, ambiguous
 
 
@@ -333,6 +360,42 @@ def shown_position(page: str, candidates: list[str], every: list[str] | None = N
     return named if named in candidates else None
 
 
+# Words a portal uses to confirm that a bid came in, as stems in a few languages (a line of the page after the final
+# click that was not on the review page before it).
+RECEIPT = re.compile(r"eingegangen|eingereicht|erhalten|empfangen|bestätig|bestaetig|quittung|eingangs|vielen dank|"
+                     r"erfolgreich|received|receipt|confirm|submitted|success|thank you|reçu|confirmé|potwierdz|"
+                     r"otrzyma|złożon|przyjęt", re.I)
+# On the same step a sign page may add "please confirm with the code": there only words of a receipt count.
+RECEIVED = re.compile(r"eingegangen|eingereicht|empfangen|quittung|eingangs|vielen dank|received|receipt|thank you|"
+                      r"reçu|otrzyma|złożon|przyjęt", re.I)
+ALERT = "(alert)"
+
+
+def _step_of(page: str) -> tuple:
+    """Where a page is in a form: its url and title lines and its headings."""
+    lines = page.splitlines()
+    return (tuple(l.strip() for l in lines[:3] if l.startswith(("url:", "title:"))),
+            tuple(l.strip() for l in lines if l.lstrip().startswith("#")))
+
+
+def unconfirmed(before: str, after: str) -> str | None:
+    """Why the page after the final click does not confirm the submission, None when it does. Confirmed is a page
+    that left the review/sign step without an alert, or that shows new receipt wording (not in an alert line); with
+    an alert on it, only a new step that also shows receipt wording counts (an alert may be a rejected code)."""
+    old = {l.strip() for l in before.splitlines()}
+    receipt = [l.strip() for l in after.splitlines()
+               if l.strip() not in old and ALERT not in l and RECEIPT.search(l)]
+    moved = _step_of(before) != _step_of(after)
+    alerts = [l.strip() for l in after.splitlines() if ALERT in l]
+    if not moved:
+        receipt = [l for l in receipt if RECEIVED.search(l)]
+    if (moved and receipt) or (not alerts and (moved or receipt)):
+        return None
+    headings = _step_of(after)[1]
+    shown = "; ".join(alerts[:3]) or ("still on " + " / ".join(headings[:2]) if headings else "the page did not change")
+    return shown[:300]
+
+
 def _amount(value: Decimal | None) -> str | None:
     return None if value is None else f"{value:.2f}"
 
@@ -367,8 +430,9 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     """
     reference = str(context.get("tender_reference") or bid.tender_reference)
     guard = sanity.TypingGuard() if sanity.enabled("typing_guard") else None
-    codes: list[str] = []
-    final = {"clicked": False, "page": ""}  # set by finalize once the binding submit button was pressed  # what the mailbox handed out so far: a used code must not be handed out again
+    codes: list[str] = []  # what the mailbox handed out so far: a used code must not be handed out again
+    # set by finalize: how often the binding submit button was pressed, the page after it, whether the portal confirmed
+    final = {"clicked": 0, "page": "", "confirmed": False}
     review: Report | None = None
     held_back = 0  # final steps refused because the page did not show the bid
 
@@ -502,8 +566,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
             replayed.add(position)
         return "fill_positions:\n" + "\n".join(report)
 
-    async def look() -> Report:
-        report = check_review(await tender_tab.observe(), bid, reference)
+    async def look(page: str | None = None) -> Report:
+        report = check_review(await tender_tab.observe() if page is None else page, bid, reference)
         if report.unproven and not sanity.enabled("summary_check"):  # switched off: missing evidence only warns
             report = Report(not report.blockers, report.blockers, report.warnings + report.unproven, report.checks)
         return report
@@ -516,7 +580,8 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     async def finalize(action: dict) -> str:
         nonlocal review, held_back
         # Navigation, expiry and server validation can invalidate an earlier review, so inspect it again.
-        review = await look()
+        before = await tender_tab.observe()
+        review = await look(before)
         if review.blockers:
             return review.text() + "\nFinal submission was not pressed."
         if review.unproven:
@@ -530,14 +595,29 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                   + ("time is short" if short else f"held back {held_back} time(s)") + "): "
                   + " | ".join(review.unproven), flush=True)
         result = await tender_tab.click(action.get("id"))
+        final["clicked"] += 1
         # Submitting ends the run and with it the run token: every later model call fails ("expired/unknown run
         # token" in sandbox runs 6da03229, 8184b178, 3c3568bb). So the confirmation is read here, in code, and the
-        # clerk stops without another model turn.
-        try:
-            final["page"] = await asyncio.wait_for(tender_tab.observe(), 20)
-        except Exception:  # noqa: BLE001
-            final["page"] = ""
-        final["clicked"] = True
+        # clerk stops without another model turn once the portal confirms.
+        missing = None
+        for attempt in range(2):  # a confirmation may render a moment after the click
+            try:
+                final["page"] = await asyncio.wait_for(tender_tab.observe(), 20)
+            except Exception:  # noqa: BLE001  unreadable: judged as before, the click counts
+                final["page"] = ""
+            missing = unconfirmed(before, final["page"]) if final["page"] else None
+            if missing is None or attempt or deadline - time.time() < 10:
+                break
+            await asyncio.sleep(2)
+        if missing is not None:
+            # Eval run_8be6fb149758cee5: the click was taken as a submission while the page still showed the review
+            # and sign step (no code had been entered); the clerk stopped with nothing submitted. Not confirmed, it
+            # keeps working while time remains.
+            print(f"[submit] final step pressed, no confirmation: {missing}", flush=True)
+            return (f"{result}\nThe portal did NOT confirm the submission: {missing}. The bid is not submitted yet. "
+                    "Read the page: enter a valid signing code (request a fresh one if the code was rejected or is "
+                    "used up, and fetch it with ask_mail), then check_submission and finalize again.")
+        final["confirmed"] = True
         clerk.deadline = 0  # ends the agent loop before its next model call
         return result
 
@@ -640,9 +720,12 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
     outcome = await clerk.run()
     receipt = str(outcome.get("answer") or "").strip()
     notes = str(outcome.get("summary") or "")
-    if final["clicked"]:  # submitted: the confirmation was read in code, no model turn after the click
+    if final["confirmed"]:  # submitted: the confirmation was read in code, no model turn after the click
         receipt = receipt or final["page"][:1500]
         return {"submitted": True, "receipt": receipt, "notes": notes or "submitted; confirmation read without the model"}
+    if final["clicked"]:
+        notes = (notes + " " if notes else "") + (f"final submit pressed {final['clicked']} time(s), the portal "
+                                                  "showed no confirmation after it")
     if not outcome.get("done"):
         notes = (notes + " " if notes else "") + f"stopped after {outcome.get('steps', 0)} steps without a confirmation"
     return {"submitted": bool(outcome.get("done") and receipt), "receipt": receipt, "notes": notes}

@@ -42,6 +42,7 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         agent.SITE_ROLES.clear()
         agent.RELEASED.clear()
+        agent.TOPIC_SITES.clear()
 
     tearDown = setUp
 
@@ -67,15 +68,17 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
             agent.SITE_ROLES.update({"erp": "warenwirtschaft", "mail": "postfach"})
             self.assertEqual([q for q, _ in questions_for_site("warenwirtschaft", questions)], ["material:REQ-1"])
             self.assertEqual([q for q, _ in questions_for_site("postfach", questions)], ["discount", "reserve:REQ-2"])
-            # a site that merely contains "mail" in its name but is not the mailbox gets everything
-            self.assertEqual(questions_for_site("mailing-list-portal", questions), questions)
+            # a site that merely contains "mail" in its name but is not the mailbox gets everything but the mail
+            # records: those belong to the mailbox the brief names (run 72e78b8e)
+            self.assertEqual([q for q, _ in questions_for_site("mailing-list-portal", questions)],
+                             ["positions", "material:REQ-1"])
         finally:
             agent.SITE_ROLES.clear()
 
 
     async def test_a_routed_question_left_open_is_offered_to_every_agent(self):
-        """The private dataset may split facts differently: here the packaging tariff sits in the ERP, so the mail
-        agent finishes without it. The question must reach the ERP agent instead of staying with nobody."""
+        """A non-mail question its routed agent left open reaches every agent; a mail record whose website the brief
+        names stays with that website (run 72e78b8e: released reserve questions were bounced by the ERP agent)."""
         case = FakeCase()
         case.open_questions = [("packaging_tariff:PKG-9", "the tariff"), ("material:REQ-1", "the material")]
         case._bump = lambda: (setattr(case, "version", case.version + 1), case.changed.set())
@@ -85,14 +88,32 @@ class QuestionRouting(unittest.IsolatedAsyncioTestCase):
             erp_waiting = asyncio.create_task(team.hook("erp")("done"))  # ERP finished its own question set
             await asyncio.sleep(0.02)
             self.assertIn("material:REQ-1", agent.RELEASED)  # ERP went idle with it open and nothing being read
+            self.assertIn("material:REQ-1", [q for q, _ in questions_for_site("mail", case.questions())])
             mail_waiting = asyncio.create_task(team.hook("mail")("done"))  # mail finished without the tariff
-            news = await asyncio.wait_for(erp_waiting, 2)
-            self.assertIn("packaging_tariff:PKG-9", news or "")
-            self.assertIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("erp", case.questions())])
+            await asyncio.sleep(0.05)
+            self.assertNotIn("packaging_tariff:PKG-9", agent.RELEASED)
+            self.assertNotIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("erp", case.questions())])
+            self.assertIn("packaging_tariff:PKG-9", [q for q, _ in questions_for_site("mail", case.questions())])
+            erp_waiting.cancel()
             mail_waiting.cancel()
         finally:
             agent.SITE_ROLES.clear()
             agent.RELEASED.clear()
+
+    def test_a_topic_the_brief_keeps_on_another_website_goes_there(self):
+        """The private dataset may split facts differently (eval variant B: an approval register in the ERP): the
+        brief's record_sites send that topic's questions to that website's agent alone."""
+        questions = [("packaging_tariff:PKG-9", "t"), ("discount", "d"), ("material:REQ-1", "m")]
+        try:
+            agent.SITE_ROLES.update({"erp": "erp", "mail": "mail"})
+            agent.TOPIC_SITES.update({"packaging_tariffs": "erp"})
+            self.assertEqual([q for q, _ in questions_for_site("erp", questions)],
+                             ["packaging_tariff:PKG-9", "material:REQ-1"])
+            self.assertEqual([q for q, _ in questions_for_site("mail", questions)], ["discount"])
+            self.assertEqual([q for q, _ in questions_for_site("portal", questions)], ["material:REQ-1"])
+        finally:
+            agent.SITE_ROLES.clear()
+            agent.TOPIC_SITES.clear()
 
     def test_nothing_is_released_while_documents_are_still_being_read(self):
         case = FakeCase()

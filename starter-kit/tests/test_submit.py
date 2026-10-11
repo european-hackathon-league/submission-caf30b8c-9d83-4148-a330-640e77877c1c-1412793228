@@ -61,6 +61,22 @@ class FakeTab:
         return "logged in"
 
 
+class ConfirmingTab(FakeTab):
+    """A sign step whose submit button is answered with an alert until click number `confirm_on`, then a receipt."""
+
+    def __init__(self, site_id: str, view: str, confirm_on: int = 1):
+        super().__init__(site_id, view)
+        self.confirm_on = confirm_on
+
+    async def click(self, aid) -> str:
+        result = await super().click(aid)
+        if len(self.done) >= self.confirm_on:
+            self.view = "# Thank you\nYour bid has been received. Receipt no. 77"
+        elif "(alert)" not in self.view:
+            self.view += "\n(alert) code rejected"
+        return result
+
+
 class Script:
     """Stands in for llm.chat_json: answers each agent, named by `label`, with its next scripted reply."""
 
@@ -78,6 +94,27 @@ class Script:
 
 def done(**fields) -> dict:
     return {"thought": "", "actions": [{"do": "done", **fields}]}
+
+
+class ReadingTheConfirmation(unittest.TestCase):
+    SIGN = 'url: http://portal.test/bid\ntitle: Portal\n# Review and sign, step 8 of 8\nTotal 500.00\n[1] button "Submit"'
+
+    def test_a_new_step_without_an_alert_is_a_confirmation(self):
+        self.assertIsNone(submit.unconfirmed(self.SIGN, "url: http://portal.test/done\ntitle: Portal\n# Done\nNo. 4711"))
+
+    def test_receipt_wording_on_the_same_page_is_a_confirmation(self):
+        self.assertIsNone(submit.unconfirmed(self.SIGN, self.SIGN + "\n(status) Your bid was received: no. 4711"))
+
+    def test_the_same_sign_step_is_no_confirmation(self):
+        self.assertIn("still on # Review and sign", submit.unconfirmed(self.SIGN, self.SIGN))
+        asked = self.SIGN + "\nPlease confirm the bid with your code"  # instruction wording, not a receipt
+        self.assertIsNotNone(submit.unconfirmed(self.SIGN, asked))
+
+    def test_an_alert_is_no_confirmation_even_with_confirmation_words(self):
+        after = self.SIGN + "\n(alert) Confirmation code invalid"
+        self.assertIn("Confirmation code invalid", submit.unconfirmed(self.SIGN, after))
+        moved = after.replace("# Review and sign, step 8 of 8", "# Signature code")
+        self.assertIsNotNone(submit.unconfirmed(self.SIGN, moved))
 
 
 class TheBidSheet(unittest.TestCase):
@@ -179,14 +216,39 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
     async def test_final_confirmation_requires_a_clean_live_checklist(self):
         script = Script(submit=[{"thought": "", "actions": [{"do": "check_submission"}, {"do": "finalize", "id": 1}]},
                                 done(answer="R-1")])
-        tender = FakeTab("tender", "Tender T-0001\nPosition 1\nTotal 500.00\n[1] button \"Submit\"")
+        tender = ConfirmingTab("tender", "# Review and sign\nTender T-0001\nPosition 1\nTotal 500.00\n[1] button \"Submit\"")
         with patch.object(llm, "chat_json", script):
             result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
         self.assertIn(("click", 1), tender.done)
         self.assertTrue(result["submitted"])
         # submitting ends the run token: the confirmation is read in code and no further model turn follows
         self.assertEqual(len(script.turns("submit")), 1)
-        self.assertIn("Total 500.00", result["receipt"])
+        self.assertIn("Receipt no. 77", result["receipt"])
+
+    async def test_a_final_click_the_portal_does_not_confirm_lets_the_clerk_try_again(self):
+        # eval run_8be6fb149758cee5: after the click the page still showed the sign step: not submitted
+        finalize = {"thought": "", "actions": [{"do": "finalize", "id": 1}]}
+        script = Script(submit=[finalize, finalize, done(summary="unused")])
+        sign = "# Review and sign, step 8 of 8\nTender T-0001\nPosition 1\nTotal 500.00\n[1] button \"Submit\""
+        tender = ConfirmingTab("tender", sign, confirm_on=2)
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        told = script.turns("submit")[1]["user"]
+        self.assertIn("did NOT confirm the submission", told)
+        self.assertIn("code rejected", told)
+        self.assertEqual(tender.done, [("click", 1), ("click", 1)])
+        self.assertEqual(len(script.turns("submit")), 2)  # confirmed on the second click: no turn after it
+        self.assertTrue(result["submitted"])
+
+    async def test_a_final_click_never_confirmed_is_not_reported_as_submitted(self):
+        finalize = {"thought": "", "actions": [{"do": "finalize", "id": 1}]}
+        script = Script(submit=[finalize, done(summary="gave up")])
+        sign = "# Review and sign\nTender T-0001\nPosition 1\nTotal 500.00\n[1] button \"Submit\""
+        tender = ConfirmingTab("tender", sign, confirm_on=99)
+        with patch.object(llm, "chat_json", script):
+            result = await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + 900)
+        self.assertFalse(result["submitted"])
+        self.assertIn("no confirmation", result["notes"])
 
     async def test_final_confirmation_is_blocked_by_an_unfilled_required_control(self):
         script = Script(submit=[{"thought": "", "actions": [{"do": "check_submission"}, {"do": "finalize", "id": 1}]},
