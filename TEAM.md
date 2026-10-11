@@ -210,6 +210,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
 | 05:19 | **run_1470dade** | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | **100** | ✅ | ~12 min | 221 / $0.24 | Public check 2: no regression on public-1 |
+| 05:12 | **run_f402181d** | Vamshidhar | package 35eb499d = `maria/escalation` **fc54a43** | **100** | ✅ | 10 min | 249 / $0.29 | |
 | 04:55 | **sub_902fc357 (SUBMISSION, promoted by the organisers)** | Organisers | test run a176359f = `maria/cost` **f851d41** (package 2c82a7bf) | **100** | ✅ | 6:15 | 192 / $0.176 | **Now our final package.** Leaderboard: #7, $0.176, 6:15 |
 | 05:19 | run_49f7be51 | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | running | | | | Public check 1: candidate to replace the final package |
 | 04:55 | **run_a176359f** | Maria | `maria/cost` **f851d41** (+ generalisation fixes from the evals: f4e04d2, 568b228) | **100** | ✅ | **6 min** | 192 / **$0.18** | No regression on public-1 from the eval fixes |
@@ -394,6 +395,7 @@ Comparison runs (fill in): same commit, `SANITY_CHECKS=default` vs `none` → qu
 
 - Branch off `main`, pull before you push, small commits, and put the measured effect in the commit message.
 - **Nobody runs `atira submit` without Maria's go.** Our latest submission that passes review goes into the final, so no experimental submissions.
+- **Name every test and eval run after its branch and commit**, e.g. `maria/cost 1d0ecea` (`atira run name <run> "<branch> <commit>"`; eval runs: `--label`). Maria's runner does it automatically; earlier runs were named after the fact (11 Oct, 05:45 UTC).
 - **Only Maria and Vamshidhar start sandbox test runs** (at most 3 queued per team). Every run goes into the score log the moment it is sent. **A test run that scores better can be promoted to a submission by the organisers, so it may become the final package.**
 - Fair play: the model must choose navigation, searches and documents. No fixed click paths, no crawlers, and **no scenario values** (tender references, material numbers, keys, prices, logins) anywhere in `starter-kit/`, including tests and comments. Tests use invented values.
 - Never `--no-verify`: Entire needs its git hooks to link sessions to commits. Start your coding agent inside the repo folder so its session is captured.
