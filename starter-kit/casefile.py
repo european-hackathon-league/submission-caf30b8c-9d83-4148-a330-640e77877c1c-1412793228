@@ -84,7 +84,7 @@ A key the answer says does not apply ("no pool", "no bonus") is null.""",
   "allocation_mass": "<mass used to allocate shared setup cost, as written, or null>", "allocation_mass_unit": "mg|g|kg|t",
   "surcharge_mass": "<mass the metal surcharge is charged on, as written, or null>", "surcharge_mass_unit": "mg|g|kg|t",
   "metal_index_code": "<price index code or null>", "number_format": "de-DE|en-US",
-  "free_stock": <freely available / unrestricted stock in pieces (e.g. 'Frei verwendbar' or 'Verfügbarer Gesamtbestand'), EXCLUDING blocked/inspection/reserved stock ('Prüfbestand', 'Gesperrt'). If the page only shows total physical stock ('Physischer Bestand') or says to open storage locations for availability, MUST be null; int|null>,
+  "free_stock": <freely available / unrestricted stock in pieces (e.g. 'Frei verwendbar' or 'Verfügbarer Gesamtbestand'), EXCLUDING blocked/inspection/reserved stock ('Prüfbestand', 'Gesperrt'). If the page only shows total physical stock ('Physischer Bestand') or says to open storage locations for availability, MUST be null. A single stock figure with no breakdown and no mention of blocked, inspection or reserved stock is the free stock; int|null>,
   "stock_lead_weeks": <delivery time from stock in weeks, int|null>,
   "production_lead_weeks": <production lead time in weeks, int|null>}]}""",
     "price_conditions": """Price conditions (condition records with validity and quantity scales) of ONE material.
@@ -97,6 +97,7 @@ A key the answer says does not apply ("no pool", "no bonus") is null.""",
   "tender_reference": "<the reference this message is about, exactly as written, with any suffix>",
   "topic": "discount_approval|condition_rules|price_indices|tech_release|packaging_tariffs|delivery_release|fx_fixing|setup_pools|project_bonus|other",
   "number_format": "de-DE|en-US",
+  "quantity_changes": [{"position": "<position>", "quantity": <new binding quantity, integer>}],
   "discount": {"approves": <true only if the message itself grants a discount>, "percent": "<as written>",
                "min_order_value": "<minimum net order value the approval is conditional on, or null>"},
   "condition_rules": [{"group": "<key>", "discount_applies_to": "base_only|base_and_surcharge|none"}],
@@ -108,7 +109,8 @@ A key the answer says does not apply ("no pool", "no bonus") is null.""",
   "setup_pools": [{"key": "<pool key>", "fee": "<the pool's one fee, as written>",
                    "cent_allocation": "largest_remainder|remainder_to_first|remainder_to_last|remainder_to_largest"}],
   "project_bonus": [{"key": "<plan key>", "bands": [{"from": "<lower bound>", "to": "<upper bound or null if open-ended>", "percent": "<rate>"}]}]}]}
-Fill only the blocks the message's original text really contains; leave the others out. Take values from the
+quantity_changes: only when the message itself (for example the buyer's request) changes the binding quantity of a
+tender position. Fill only the blocks the message's original text really contains; leave the others out. Take values from the
 message as sent, never from a draft, preview or quoted template shown around it. One price index code can list
 several rates with validity windows: give each as its own entry.""",
 }
@@ -604,6 +606,16 @@ class CaseFile:
                 if fee is not None:
                     entry.setup_fees[position] = fee
             clarifications.append(entry)
+        # A quantity change can also come by mail (eval variant A: the buyer's request changed one position): it
+        # counts like a Q&A answer of its date, for exactly this tender reference and not after the scenario date.
+        for key, row in self.messages.items():
+            changes = [(str(change["position"]).strip(), _int(change.get("quantity")), None)
+                       for change in row.get("quantity_changes") or []
+                       if isinstance(change, dict) and _text(change.get("position")) and _int(change.get("quantity")) is not None]
+            when = parse_when(row.get("timestamp"))
+            if (changes and (_text(row.get("tender_reference")) or "").upper() == self.reference.upper()
+                    and (when is None or when <= self.scenario)):
+                clarifications.append(Clarification(f"mail:{key}", when, quantity_changes=changes))
         requirements = {}
         for (revision, ref), row in self.requirements.items():
             if governing and revision and not same_text(revision, governing):
