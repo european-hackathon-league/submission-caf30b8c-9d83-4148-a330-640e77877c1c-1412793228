@@ -112,6 +112,30 @@ case. What was checked on branch `maria/erp-loop-fixes` (not merged):
 | Changed-data review (11 Oct, night) | No public-scenario words in the package code or prompts (portal labels, rule names). Units outside the known list fall back to the model's own set/piece flag. Money values carry a format tag from extraction; German dimensions in amendments were already read correctly. **Found and fixed (dd8127d): a whole number written "1.250" or "1,250" (quantity, stroke, carton, weeks) was read as 1**; public-1 never had such values. Routing by role with a fallback when facts are split differently (279dad9) |
 | Still open | Scanned (image-only) PDFs: no OCR. Prompts and hints were written from public-scenario failures (no public values in them) |
 
+## External bottleneck review of f851d41, checked against our data (11 Oct, 05:40 UTC)
+
+Checked on the good run a176359f (f851d41, now the final package): 100, 374 s, 192 calls, $0.176.
+
+| Review's point | Our data | Verdict |
+|---|---|---|
+| Long navigation timeouts (45 s step, 20 s navigation) | Only 3 of ~180 actions took > 15 s (one 78 s tender-portal fill); long waits dominate only in sandbox outage runs | **Partly agree.** 8 s would also cut slow but working pages (10-20 s ERP loads seen). Test separately: e.g. 20 s per step + one quick tab renewal |
+| Repeated extraction calls | 42 extract calls but 82k tokens = **5%** of input | **Low payoff**; one call per domain would also mix records (risk on private data) |
+| Completed agents repeating "done" | 1-2 "done" per agent in the whole run | **Not supported by the data** |
+| Sequential mail searches → one search + local filtering | Mail 25 turns, 290k tokens (18%) | **Reject the deterministic part** (fair play: the model chooses searches and documents). Rule-safe: one model search + `file_each` on the hits |
+| Page-by-page ERP → deterministic loop with local parsing | ERP 46 turns, 466k tokens (**28%**, the largest share) | **Agree on the target, reject the method**: local parsers break on other ERP software. Rule-safe lever: get ERP to use `file_each` with paths (d9bb4e5+); it does not yet |
+| Scripted submission | Clerk 36 turns, 361k tokens (22%) here; 16 turns in the best runs | **Reject scripting** (fair play, other bid forms). Lever: make the clerk use `steps` reliably (here it did not) |
+| Global 10-12 call cap | Runs need 150-200 calls | **Reject**: cuts the investigation short, costs quality (first criterion, and the private run) |
+| History cost | 10-turn cap active | Partly addressed; the bigger fixed block is the system prompt (~6k tokens per call) |
+
+**What the review leaves out:** it covers cost and runtime only. The evals show the bigger risk is **quality on other
+worlds**: f851d41 lacks d6d6979 (requirements without pressure: eval A 0 → 100), the revision-id fix and the clerk turn
+reserve. The "11:11 rehearsal, $0.2507" is not one of Maria's runs (Vamshidhar's? please add it to the score log with
+its package).
+
+**Priorities from here:** (1) confirm 1d0ecea on both evals and public-1, then replace the final package (Maria +
+Vamshidhar's go); (2) ERP `file_each` with paths and the clerk's `steps` used reliably (cost and time within fair play);
+(3) timeout tuning as its own measured experiment.
+
 ## Where the cost goes (keep in mind for every change)
 
 Measured on the branch's 100 run 2b8b5ca8 ($0.31): **199 calls sent 2.48 M input tokens, about 12,400 per call,
