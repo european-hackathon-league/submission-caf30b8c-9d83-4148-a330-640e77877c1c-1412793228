@@ -22,6 +22,7 @@ from playwright.async_api import async_playwright
 
 import browsers
 import llm
+import orchestrator
 import run as contract
 from browser_env import Tab
 from calculator import calculate_bid
@@ -157,6 +158,16 @@ class Team:
         self.idle: set[str] = set()
         self.finished = asyncio.Event()
         self.woken: dict[str, float] = {}  # when an agent was last woken for finished reading (at most every 30 s)
+        # The coordinator model (orchestrator.py), set by solve when ORCHESTRATOR is on: it is told when an agent goes
+        # idle, its tasks wake idle agents, and it is asked once before the investigation ends.
+        self.orch: orchestrator.Orchestrator | None = None
+        self._ending: asyncio.Task | None = None
+
+    async def _end(self) -> None:
+        """Every agent is idle: the coordinator confirms the end or hands out work (bounded in orchestrator.py)."""
+        complete = await self.orch.confirm_end()
+        if complete and self.idle == self.names and self.case.pending == 0 and not self.orch.undelivered():
+            self.finished.set()
 
     def release(self, name: str, candidates: set[str]) -> None:
         """A routed agent (ERP or mail) went idle leaving `candidates` open and nothing is being read any more: those
@@ -185,8 +196,14 @@ class Team:
             # read" with its material questions already open; they were never new, so it slept for 400 s.
             reading = self.case.pending
             self.idle.add(name)
+            if self.orch:
+                self.orch.went_idle(name, why, ask=self.idle != self.names)
+                self.orch.start_watch(self.finished)
             try:
                 while not self.finished.is_set() and time.time() < self.deadline:
+                    task = self.orch.wake(name) if self.orch else None
+                    if task:
+                        return task
                     changed = await self.case.wait_change(version, 1.0)
                     if self.finished.is_set():
                         break
@@ -203,10 +220,15 @@ class Team:
                             return ("Documents that were still being read are now in the case file. Open questions: "
                                     f"{', '.join(sorted(still_open))}. Work on those your website can answer.")
                     elif self.idle == self.names and self.case.pending == 0:
-                        self.finished.set()
+                        if not self.orch:
+                            self.finished.set()
+                        elif not self.orch.undelivered() and (self._ending is None or self._ending.done()):
+                            self._ending = asyncio.get_running_loop().create_task(self._end())
                 return None
             finally:
                 self.idle.discard(name)
+                if self.orch:
+                    self.orch.woke(name)
         return hold
 
 
@@ -483,7 +505,11 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         ids = [qid for qid, _ in questions]
         sections = (None if gate >= 2 else set() if gate == 0
                     else status_sections(ids, filed_kinds) | ROLE_SECTIONS.get(site_role(name) or "", set()))
-        text = f"CASE FILE\n{case_view(sections)}\n\nOPEN QUESTIONS\n"
+        text = f"CASE FILE\n{case_view(sections)}\n\n"
+        coordinator = team.orch.briefing_line(name) if getattr(team, "orch", None) else ""
+        if coordinator:  # above the open questions: work the rules did not foresee (orchestrator.py)
+            text += coordinator + "\n\n"
+        text += "OPEN QUESTIONS\n"
         # The mailbox agent sees every record it still needs at once, with the brief's subject word and sender,
         # so that it can plan its searches (sandbox runs 9ac58b69, 472732d2, 63f3be2e: 25-46 turns of guessing).
         checklist = case.mail_checklist(questions) if site_role(name) == "mail" else ""
@@ -610,6 +636,8 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         return None
 
     agent.on_action = note_walk
+    if getattr(team, "orch", None):
+        team.orch.agents[name] = agent
     gates.log = agent.log
     agent.gates = gates
     agent.full_system = full_system
@@ -752,6 +780,19 @@ async def solve(task: dict, playwright) -> dict | None:
     try:
         working = [tab for name, tab in tabs.items() if not only or name in only]
         team = Team(case, [tab.site_id for tab in working], investigate_until)
+        if orchestrator.enabled():
+            kept: dict[str, list[str]] = {}
+            for topic, site in TOPIC_SITES.items():
+                kept.setdefault(site, []).append(topic)
+            roles = {tab.site_id: " ".join(filter(None, [
+                site_role(tab.site_id) or "",
+                f"keeps the {', '.join(kept[tab.site_id])} records" if tab.site_id in kept else ""])) or "general"
+                for tab in working}
+            team.orch = orchestrator.Orchestrator(
+                case, {tab.site_id: {"url": tab.base_url, "role": roles[tab.site_id]} for tab in working},
+                brief_for(case.brief, drop_sections=INVESTIGATOR_DROP), questions_for_site, investigate_until)
+            team.orch.over_budget = lambda: budget_used() >= BUDGET_NEAR
+        print(f"Orchestrator {'on' if team.orch else 'off'}", flush=True)
         async def bounded(tab):  # an agent stuck past the deadline is stopped so that the others' facts still count
             restarted = False
             while True:
@@ -775,6 +816,8 @@ async def solve(task: dict, playwright) -> dict | None:
                     continue
                 return outcome
         outcomes = await asyncio.gather(*(bounded(tab) for tab in working), return_exceptions=True)
+        if team.orch:
+            team.orch.stop()
         for tab, outcome in zip(working, outcomes):
             print(f"[{tab.site_id}] finished: {outcome if isinstance(outcome, Exception) else json.dumps(outcome, ensure_ascii=False)[:300]}", flush=True)
         for _ in range(40):  # facts of the last filed documents

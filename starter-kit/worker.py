@@ -207,6 +207,7 @@ class Agent:
         self.full_briefing: Callable[[], str] | None = None
         self.stop_when: Callable[[], str | None] | None = None
         self.steps = 0
+        self.finish_summary = ""  # the summary of its last done (orchestrator.py reads it)
         self.started = time.time()
 
     @property
@@ -476,6 +477,7 @@ class Agent:
             if reason:  # finished without another model call; an idle agent may still be woken (and stopped again)
                 self.log(f"finishing: {reason}")
                 outcome.update(summary=reason, answer=None)
+                self.finish_summary = reason
                 news = await self.idle("done") if self.idle else None
                 if news is None:
                     outcome["done"] = True
@@ -705,6 +707,7 @@ class Agent:
                                "Work on what the case file news asks for, by a different way than before.")
             if finished is not None:
                 outcome.update(summary=str(finished.get("summary", "")), answer=finished.get("answer"))
+                self.finish_summary = outcome["summary"]  # what the coordinator reads when the agent goes idle
                 news = await self.idle("done") if self.idle else None
                 if news is None:
                     outcome["done"] = True
