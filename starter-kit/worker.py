@@ -65,6 +65,19 @@ STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung pag
 # a page of up to 14,000 characters on every call, and input tokens are most of the run's cost (the provider's prompt
 # cache hits only now and then). FULL_TURNS=2 brings back the earlier setting for comparison.
 FULL_TURNS = int(os.environ.get("FULL_TURNS", "1"))
+# How many past turns are kept at all; older ones shrink to their thought. Every kept turn costs ~250 tokens on every
+# later call, and the ERP agent runs 40-60 turns: in run 4876a0ad its calls averaged ~14k input tokens, about half of
+# them old history (ERP was 46% of the run's input). HISTORY_TURNS=0 keeps every turn, as before.
+HISTORY_TURNS = int(os.environ.get("HISTORY_TURNS", "10"))
+
+
+def _thought(reply: str) -> str:
+    """The thought of a stored reply, one line, for the condensed older history."""
+    try:
+        text = str(json.loads(reply).get("thought") or "")
+    except (ValueError, AttributeError):
+        text = reply
+    return " ".join(text.split())[:200] or "(no thought)"
 NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps"}
 STEPS_LIMIT, STEPS_TIMEOUT = 30, 240  # one "steps" action: at most this many steps, and seconds in all
 ALERT = re.compile(r"\((?:alert|status)\)[^\n]*")  # a message the page announces to screen readers (Tab.observe)
@@ -163,11 +176,18 @@ class Agent:
 
     def _messages(self, user: str) -> list[dict]:
         messages = [{"role": "system", "content": self.system}]
-        for index, turn in enumerate(self.turns):
-            recent = index >= len(self.turns) - FULL_TURNS
-            messages.append({"role": "user", "content": turn["user"] if recent else turn["short"]})
+        kept = self.turns[-HISTORY_TURNS:] if HISTORY_TURNS > 0 else self.turns
+        older = self.turns[:len(self.turns) - len(kept)]
+        earlier = ""
+        if older:  # one line per older turn: what the agent thought, so it still knows what it tried
+            earlier = ("EARLIER IN THIS TASK (your thoughts, oldest first; their pages and results are no longer shown)\n"
+                       + "\n".join(f"- {_thought(turn['assistant'])}" for turn in older) + "\n\n")
+        for index, turn in enumerate(kept):
+            recent = index >= len(kept) - FULL_TURNS
+            content = turn["user"] if recent else turn["short"]
+            messages.append({"role": "user", "content": (earlier + content) if index == 0 else content})
             messages.append({"role": "assistant", "content": turn["assistant"]})
-        messages.append({"role": "user", "content": user})
+        messages.append({"role": "user", "content": (earlier + user) if not kept else user})
         return messages
 
     async def _escalated_turn(self, user: str) -> dict:
