@@ -177,6 +177,11 @@ class Requirement:
     def missing(self) -> list[str]:
         return [name for name in ("bore_mm", "stroke_mm", "pressure_bar", "mounting") if getattr(self, name) is None]
 
+    def unmatchable(self) -> bool:
+        """Too little is known to choose a material. A pressure the specification does not state is no criterion
+        (eval variant A); the open questions still ask for it while the investigation runs."""
+        return any(getattr(self, name) is None for name in ("bore_mm", "stroke_mm", "mounting"))
+
 
 @dataclass
 class PriceCondition:
@@ -413,7 +418,7 @@ def calculate_bid(tender_reference: str, scenario: datetime, governing_revision:
     known: dict[str, tuple] = {}
     for p in sorted(positions, key=lambda p: position_order(p.position)):
         need = needs.get(p.requirement_ref)
-        if need is not None and p.requirement_ref not in waiting and not need.missing():
+        if need is not None and p.requirement_ref not in waiting and not need.unmatchable():
             material = match_material(need, materials)
             if material is None and p.requirement_ref in (no_material or set()):
                 approved = authorities.discount_percent or ZERO

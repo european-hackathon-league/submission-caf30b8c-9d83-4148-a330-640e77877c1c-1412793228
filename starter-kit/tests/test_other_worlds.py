@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import casefile  # noqa: E402
-from calculator import Material, Requirement, match_material  # noqa: E402
+from calculator import Material, Requirement, calculate_bid, match_material  # noqa: E402
 
 
 class AWorldWithFewerRules(unittest.TestCase):
@@ -55,6 +55,38 @@ class AWorldWithFewerRules(unittest.TestCase):
         self.assertIn("change or amendment", casefile.SHAPES["clarifications"])
         self.assertIn("A register of approvals", casefile.SHAPES["mail"])
         self.assertIn("never a\nchange notice", casefile.SHAPES["revisions"])
+
+    def test_a_world_without_pressures_is_priced_end_to_end(self):
+        # the whole path the run takes: filed facts → case file inputs → calculator (eval variant A still scored 0
+        # after the matching fix, because a requirement without a pressure counted as incomplete and was skipped)
+        case = casefile.CaseFile("brief", {"tender_reference": "T-77", "scenario_date": "2030-05-01"})
+        case.merge("positions", {"positions": [{"position": "10", "quantity": 20, "unit": "Stk", "requirement_ref": "R-1"}]})
+        case.merge("revisions", {"document": "SPEC-9", "revisions": [{"revision": "B", "date": "2030-03-01", "status": "current"}]})
+        case.merge("requirements", {"revision": "B", "requirements": [
+            {"requirement_ref": "R-1", "bore_mm": 40, "stroke_mm": 250, "mounting": "Flansch", "certification": None}]})
+        case.merge("material", {"materials": [
+            {"material_number": "M-1", "is_active": True, "bore_mm": 40, "stroke_mm": 250, "pressure_bar": 160,
+             "mounting": "Flansch", "certification": None, "free_stock": 30, "stock_lead_weeks": 2, "production_lead_weeks": 7},
+            {"material_number": "M-2", "is_active": True, "bore_mm": 40, "stroke_mm": 300, "pressure_bar": 160,
+             "mounting": "Flansch", "certification": None, "free_stock": 99, "stock_lead_weeks": 1, "production_lead_weeks": 7}]})
+        case.merge("price_conditions", {"material_number": "M-1", "conditions": [
+            {"valid_from": None, "valid_to": None, "currency": "EUR", "price_unit_pieces": 1, "number_format": "de-DE",
+             "scales": [{"min_quantity": "1", "price": "100,00"}, {"min_quantity": "20", "price": "90,00"}]}]})
+        case.merge("mail", {"messages": [
+            {"sender": "director@bidder.example", "timestamp": "2030-04-01T08:00:00Z", "subject": "Discount T-77",
+             "tender_reference": "T-77", "topic": "discount_approval", "number_format": "de-DE",
+             "discount": {"approves": True, "percent": "5 %"}},
+            {"sender": "buyer@city.example", "timestamp": "2030-04-02T09:00:00Z", "subject": "Request T-77",
+             "tender_reference": "T-77", "topic": "other", "quantity_changes": [{"position": "10", "quantity": 24}]}]})
+        facts = case.inputs()
+        bid = calculate_bid(case.reference, case.scenario, facts.governing, facts.positions, facts.clarifications,
+                            facts.requirements, facts.materials, facts.authorities, facts.no_material)
+        answer = bid.answer()
+        line = answer["positions"][0]
+        # 24 pieces (the mail), scale 90.00 (from 20), minus 5 % = 85.50; stock 30 covers 24 → 2 weeks
+        self.assertEqual((line["material_number"], line["quantity"], line["unit_price"], line["lead_time_weeks"]),
+                         ("M-1", 24, 85.5, 2))
+        self.assertEqual(answer["total_net"], 2052.0)
 
     def test_the_extraction_is_told_that_one_plain_stock_figure_is_the_free_stock(self):
         self.assertIn("A single stock figure with no breakdown", casefile.SHAPES["material"])
