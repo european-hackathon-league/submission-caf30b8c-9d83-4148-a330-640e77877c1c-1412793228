@@ -185,6 +185,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 05:19 | run_1470dade | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | running | | | | Public check 2 |
+| 05:19 | run_49f7be51 | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | running | | | | Public check 1: candidate to replace the final package |
 | 04:55 | **run_a176359f** | Maria | `maria/cost` **f851d41** (+ generalisation fixes from the evals: f4e04d2, 568b228) | **100** | ✅ | **6 min** | 192 / **$0.18** | No regression on public-1 from the eval fixes |
 | 04:54 | run_15a3aaf9 | Maria | `maria/cost` **f851d41** (+ generalisation fixes from the evals: f4e04d2, 568b228) | **0 (never signed)** | ❌ | 11.5 min | 327 / $0.35 | Bid complete and correct (investigation 208 s), but the clerk cycled 4 steps on 01.02 (choose, fill, "Position hinzufügen", "not possible", Weiter, "complete the configuration") into its **120-step cap** before time was short. **Fixed in b57394a:** with 25 turns left the clerk is told to leave out what is not entered and sign |
 | 04:33 | **run_33e5cab1** | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | **100** | ✅ | ~10 min | 244 / $0.26 | |
