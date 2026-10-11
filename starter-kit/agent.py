@@ -46,12 +46,12 @@ Case-file actions:
       File the document in front of you (the current page, or the document you just collected or fetched) as
       evidence. Its facts are then extracted into the shared case file and reported back to you. Kinds:
         positions         the tender's bill of quantities
-        clarifications    answers of the tender's bidder Q&A
+        clarifications    answers of the tender's bidder Q&A, and change or amendment notices to the tender
         revisions         the revision history of the buyer's technical specification
         requirements      the requirement details of one specification revision
         material          ERP master data of materials: technical attributes, status, planning, stock
         price_conditions  ERP price conditions of one material: validity, currency, quantity scales
-        mail              an opened mail message
+        mail              an opened mail message, or a register of approvals/releases (one record per row)
   {{"do": "file_each", "links": [12, 15, 18], "kind": "<kind>", "tabs": [{{"tab": "<tab label>", "kind": "<kind>"}}]}}
       Open each record you name from the list in front of you (up to 12 links by id) and file it with keep as
       "kind"; "tabs" (optional) also opens and files those tabs of every record, each with its own kind. A tab can

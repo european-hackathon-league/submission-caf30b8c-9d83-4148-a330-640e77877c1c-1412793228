@@ -53,7 +53,9 @@ SHAPES = {
 {"positions": [{"position": "<position number>", "description": "<short text>", "quantity": <integer as published>,
   "unit": "<unit as written>", "unit_is_set": <true if the unit counts sets/kits of several pieces, false for individual pieces>,
   "requirement_ref": "<the specification requirement this position refers to>"}]}""",
-    "clarifications": """Answers of the tender's bidder Q&A. One entry per answer; an answer that changes nothing still gets an entry.
+    "clarifications": """Answers of the tender's bidder Q&A, or other binding notices that change the tender (change or amendment
+notices, "Änderungsmitteilung"); for a notice, its number is the answer number. One entry per answer; an answer that
+changes nothing still gets an entry.
 {"answers": [{"number": "<answer number>", "timestamp": "<when it was issued>",
   "withdraws": ["<number of an earlier answer this one withdraws>"],
   "quantity_changes": [{"position": "<position>", "quantity": <new binding quantity>,
@@ -65,7 +67,8 @@ SHAPES = {
      "delivery_commitment": "<key or null>", "setup_pool": "<key or null>", "project_bonus": "<key or null>",
      "ordinary_setup_fee": "<one-off setup fee for this position as written, or null>", "number_format": "de-DE|en-US"}]}]}
 A key the answer says does not apply ("no pool", "no bonus") is null.""",
-    "revisions": """The revision history of the buyer's technical specification.
+    "revisions": """The revision history of the buyer's technical specification: only the specification's own revisions, never a
+change notice or other document listed next to it.
 {"document": "<document name or number>", "revisions": [{"revision": "<revision id>", "date": "<date>",
   "status": "current|superseded|draft|unknown", "status_text": "<the status as written>"}]}""",
     "requirements": """Requirements of ONE revision of the technical specification.
@@ -91,7 +94,9 @@ A key the answer says does not apply ("no pool", "no bonus") is null.""",
 {"material_number": "<number>", "conditions": [{"valid_from": "<date>", "valid_to": "<date>", "currency": "<ISO code>",
   "fx_key": "<key of the FX fixing it names, or null>", "price_unit_pieces": <the number of pieces the prices are quoted for, int>,
   "number_format": "de-DE|en-US", "scales": [{"min_quantity": "<from quantity as written>", "price": "<price as written>"}]}]}""",
-    "mail": """Messages of the sales mailbox. One entry per message whose text is shown.
+    "mail": """Messages of the sales mailbox. One entry per message whose text is shown. A register of approvals or releases on
+another site (a table of records, e.g. discount approvals) is read the same way: one entry per record, its approver
+as sender, its date as timestamp, its procedure or tender reference as tender_reference.
 {"mailbox_address": "<the mailbox the user is logged in to, if the page shows it, else null>",
  "messages": [{"sender": "<sender address>", "timestamp": "<sent/received>", "subject": "<subject>",
   "tender_reference": "<the reference this message is about, exactly as written, with any suffix>",
@@ -483,12 +488,16 @@ class CaseFile:
     # ---- from records to calculator inputs -------------------------------------------------------------------
 
     def governing_revision(self) -> str | None:
+        """The latest current revision; one with requirements on file first, so that a document listed as "current"
+        next to the specification (eval variant B: a change notice) cannot replace the specification itself."""
         current = []
+        with_requirements = {same for (revision, _ref) in self.requirements for same in [revision] if revision}
         for key, row in self.revisions.items():
             when = parse_when(row.get("date"))
             if row.get("status") == "current" and (when is None or when <= self.scenario):
-                current.append((when or datetime.min.replace(tzinfo=timezone.utc), key))
-        return max(current)[1] if current else None
+                filed = any(same_text(key, revision) for revision in with_requirements)
+                current.append((filed, when or datetime.min.replace(tzinfo=timezone.utc), key))
+        return max(current)[2] if current else None
 
     def _authorized(self, row: dict, topic: str) -> bool:
         """The brief's test for a record: exact tender reference, authorized sender, not after the scenario date."""
