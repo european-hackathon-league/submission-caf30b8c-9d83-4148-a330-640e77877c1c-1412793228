@@ -61,7 +61,10 @@ Reading the page:
 """
 
 STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung page must not freeze the whole run
-FULL_TURNS = 2  # how many past turns stay word for word; older ones keep the reasoning and drop the page text
+# How many past turns stay word for word; older ones keep the reasoning and drop the page text. Each full turn resends
+# a page of up to 14,000 characters on every call, and input tokens are most of the run's cost (the provider's prompt
+# cache hits only now and then). FULL_TURNS=2 brings back the earlier setting for comparison.
+FULL_TURNS = int(os.environ.get("FULL_TURNS", "1"))
 NAVIGATING = {"click", "goto", "back", "reload", "login", "collect", "fetch", "steps"}
 STEPS_LIMIT, STEPS_TIMEOUT = 30, 240  # one "steps" action: at most this many steps, and seconds in all
 ALERT = re.compile(r"\((?:alert|status)\)[^\n]*")  # a message the page announces to screen readers (Tab.observe)
