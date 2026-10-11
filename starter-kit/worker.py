@@ -81,7 +81,7 @@ def brief_for(brief: str, *, drop_sections: tuple[str, ...] = ()) -> str:
     return text
 
 
-STEP_TIMEOUT = 45  # seconds for one page read or one browser action: a hung page must not freeze the whole run
+STEP_TIMEOUT = int(os.environ.get("STEP_TIMEOUT", "25"))  # seconds for one page read or browser action
 READ_TIMEOUT = 20  # seconds for one page read (a healthy read takes under a second); then Agent._recover
 NAV_BUDGET = 2 * 8 + 12 + 6  # one goto: two answer waits, the build wait, settling (browser_env NAV_COMMIT/NAV_LOAD)
 # How many past turns stay word for word; older ones keep the reasoning and drop the page text. Each full turn resends
@@ -472,6 +472,7 @@ class Agent:
         repeats, last_signature, failures = 0, "", 0
         seen_signatures: dict[str, int] = {}
         stuck = 0  # page reads and navigations in a row that timed out or failed: the tab may be broken
+        fresh_page: str | None = None  # verification read from the prior turn; reuse instead of reading twice
         while self.steps < self.max_steps and time.time() < self.deadline:
             reason = self.stop_when() if self.stop_when else None
             if reason:  # finished without another model call; an idle agent may still be woken (and stopped again)
@@ -485,12 +486,16 @@ class Agent:
                 continue
             self.steps += 1
             clock = time.time()
-            try:
-                page = await asyncio.wait_for(self.tab.observe(), READ_TIMEOUT)
-            except asyncio.TimeoutError:
-                page = await self._recover()
-            except Exception as error:  # noqa: BLE001
-                page = f"(the page could not be read: {str(error)[:200]})"
+            if fresh_page is not None:
+                page, fresh_page = fresh_page, None
+                read_s = 0.0
+            else:
+                try:
+                    page = await asyncio.wait_for(self.tab.observe(), READ_TIMEOUT)
+                except asyncio.TimeoutError:
+                    page = await self._recover()
+                except Exception as error:  # noqa: BLE001
+                    page = f"(the page could not be read: {str(error)[:200]})"
             self.coverage.saw(page)
             self.page_seen = page  # the page the model answers to: its ids and link targets (file_each)
             self.read_page()
@@ -605,6 +610,7 @@ class Agent:
                 if do == "wait":
                     await asyncio.sleep(2)
                     results.append("waited two seconds")
+                    fresh_page = None
                     continue
                 if do in self.extra:
                     refusal = self._may_close(action)
@@ -615,6 +621,7 @@ class Agent:
                         results.append(await self.extra[do](action))
                     except Exception as error:  # noqa: BLE001
                         results.append(f"{do} failed: {str(error)[:200]}")
+                    fresh_page = None
                     if do not in ("keep", "answer"):  # keep clears the trail itself once it filed it
                         self.forget_trail()
                     continue
@@ -626,6 +633,7 @@ class Agent:
                     results.append(veto)
                     refused = True
                     continue
+                fresh_page = None  # a new browser action invalidates any earlier verification in this turn
                 before, page_before = self.tab.page.url, self.tab.document
                 limit = STEPS_TIMEOUT if do == "steps" else PATH_TIMEOUT if do == "path" else STEP_TIMEOUT
                 try:
@@ -654,6 +662,7 @@ class Agent:
                 if do not in ("collect", "fetch"):
                     try:
                         after = await asyncio.wait_for(self.tab.observe(), READ_TIMEOUT)
+                        fresh_page = after
                         changed = state_fingerprint(page) != state_fingerprint(after)
                         if changed:
                             self.coverage.moved()
@@ -672,12 +681,14 @@ class Agent:
                     self.forget_trail()
                 if do in ("collect", "fetch"):
                     self.held = (self.tab.document, self.tab.document_source)
+                    fresh_page = None
                 elif do in NAVIGATING:
                     self.held = None
                 if do in NAVIGATING or self.tab.page.url != before or not await self._alive():
                     moved = True
             if stuck >= 2:  # two failures in a row (a goto counts twice: it retried already): carry on in a fresh tab
                 stuck = 0
+                fresh_page = None  # renewed tab invalidates an observation from the prior tab
                 try:
                     renewed = await asyncio.wait_for(self.tab.renew(), STEP_TIMEOUT)
                     results.append("this tab kept failing to load, so it was replaced by a fresh one: " + renewed)

@@ -242,6 +242,109 @@ class TokenCutOffAndTeamWakeup(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome["steps"], 2)
         self.assertIn("Open questions remain: data:MAT-101", asked[1])
 
+
+class VerificationReadReuse(unittest.IsolatedAsyncioTestCase):
+    """The end-of-turn verification read is the next turn's current page."""
+
+    class CountingTab(FakeTab):
+        def __init__(self):
+            super().__init__(change_on_fill=True)
+            self.reads = 0
+
+        async def observe(self):
+            self.reads += 1
+            return await super().observe()
+
+        async def collect(self, aid, max_pages=10):
+            self.document, self.document_source = "collected document", "test"
+            return "collected"
+
+    async def run_script(self, turns, extra=None):
+        replies = [{"thought": f"t{i}", "actions": actions} for i, actions in enumerate(turns)]
+        replies.append({"thought": "done", "actions": [{"do": "done", "summary": "ok"}]})
+
+        async def model(messages, **kwargs):
+            return replies.pop(0)
+
+        tab = self.CountingTab()
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("reuse-test", tab, "system", lambda: "job", max_steps=6, extra=extra).run()
+        return tab, outcome
+
+    async def test_browser_action_turns_share_the_verification_read(self):
+        tab, outcome = await self.run_script([
+            [{"do": "fill", "id": 1, "text": "a"}],
+            [{"do": "fill", "id": 1, "text": "b"}],
+        ])
+        self.assertTrue(outcome["done"])
+        self.assertEqual(tab.reads, 3)  # initial read + two verification reads, not five
+
+    async def test_case_file_action_clears_the_cached_read(self):
+        async def keep(action):
+            return "filed"
+
+        tab, outcome = await self.run_script([
+            [{"do": "fill", "id": 1, "text": "a"}],
+            [{"do": "keep", "kind": "material"}],
+        ], extra={"keep": keep})
+        self.assertTrue(outcome["done"])
+        self.assertEqual(tab.reads, 3)  # helper may navigate; next turn must read the resulting page
+
+    async def test_wait_clears_the_cached_read(self):
+        tab, outcome = await self.run_script([
+            [{"do": "fill", "id": 1, "text": "a"}],
+            [{"do": "wait"}],
+        ])
+        self.assertTrue(outcome["done"])
+        self.assertEqual(tab.reads, 3)
+
+    async def test_navigation_reuses_the_verification_of_its_new_page(self):
+        tab = self.CountingTab()
+        async def click(aid):
+            tab.page.url = f"{tab.base_url}/next"
+            tab.view = f'url: {tab.page.url}\ntitle: Next\n[2] button "Continue"'
+            return f"clicked [{aid}]"
+        tab.click = click
+        replies = [
+            {"thought": "go next", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "finish", "actions": [{"do": "done", "summary": "ok"}]},
+        ]
+        async def model(messages, **kwargs):
+            return replies.pop(0)
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("navigation-reuse", tab, "system", lambda: "job", max_steps=4).run()
+        self.assertTrue(outcome["done"])
+        self.assertEqual(tab.reads, 2)  # initial page plus verification of destination
+
+    async def test_collect_clears_the_cached_read(self):
+        tab, outcome = await self.run_script([
+            [{"do": "fill", "id": 1, "text": "a"}],
+            [{"do": "collect", "id": 1}],
+        ], extra=None)
+        self.assertTrue(outcome["done"])
+        self.assertEqual(tab.reads, 3)  # collect has no verification read; next turn observes the new document
+
+    async def test_tab_renewal_clears_the_cached_read(self):
+        tab = self.CountingTab()
+        async def fail_click(aid):
+            return "click failed: net::ERR_ABORTED"
+        async def renew():
+            tab.page.url = f"{tab.base_url}/fresh"
+            tab.view = f'url: {tab.page.url}\ntitle: Fresh\n[3] button "Continue"'
+            return tab.view
+        tab.click, tab.renew = fail_click, renew
+        replies = [
+            {"thought": "retry", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "retry again", "actions": [{"do": "click", "id": 1}]},
+            {"thought": "finish", "actions": [{"do": "done", "summary": "ok"}]},
+        ]
+        async def model(messages, **kwargs):
+            return replies.pop(0)
+        with patch.object(llm, "chat_json", model):
+            outcome = await Agent("renew-reuse", tab, "system", lambda: "job", max_steps=5).run()
+        self.assertTrue(outcome["done"])
+        self.assertEqual(tab.reads, 4)  # initial, two action verifications, then read from the renewed tab
+
     async def test_multi_page_navigation_cycle_triggers_loop_warning_on_third_pass(self):
         pages = [
             "url: https://portal.example/q?page=1\n[1] link \"Next\"",
