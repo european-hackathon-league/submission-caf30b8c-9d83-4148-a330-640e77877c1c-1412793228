@@ -30,7 +30,7 @@ faster and up to 64 Qwen calls can run at once.
 
 **Fix line for the evals:** f4e04d2 (pressure optional in matching, quantity change by mail, plain stock figure) → 568b228 (approval registers, change notices, governing revision) → **d6d6979** (a requirement without a pressure is matched at all: 8d1f0b5 still scored 0 on variant A because the calculator skipped such requirements as incomplete; with the fixes before it, quantity 20→24, stock and discount were already right) on `maria/escalation`; merged into `maria/cost` = **a7ed41c**. All tests pass (incl. an end-to-end test from filed facts to the bid), golden check exact. **a7ed41c running on variant A ×2 and variant B ×2 (05:02 UTC).**
 
-**Since then:** a7ed41c scores **100 on variant A** (from 0) and 100 on public-1 (a176359f, f851d41). New: **b57394a** (cost) / clerk turn reserve on escalation. Next: revision-id normalisation + variant B brief with a scenario date, then both evals again.
+**Since then:** a7ed41c scores **100 on variant A** (from 0) and 100 on public-1 (a176359f, f851d41). New: **b57394a** (cost) / clerk turn reserve on escalation. Next: revision-id normalisation + variant B brief with a scenario date, then both evals again. **Done (05:16 UTC):** revision ids compared loosely ("Revision 2" = "2"), commit ce0d803 on escalation, merged → `maria/cost` **1d0ecea**; variant B's brief got a scenario date (new eval version). Running: 1d0ecea on variant B ×2 and variant A ×1.
 
 ### Open problems
 
