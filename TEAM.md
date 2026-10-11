@@ -1,6 +1,36 @@
 # Team QuoteCraft: who owns what
 
-EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026, 20:58.
+EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 11 Oct 2026, 04:00 UTC (06:00 Berlin).
+
+## Where we stand (11 Oct, 04:00 UTC)
+
+| | |
+|---|---|
+| **Final package** (latest passed submission) | **sub_973a02b5** = test run 4876a0ad promoted by the organisers = `maria/cost` **9105e5e** (100, **$0.164**, 8.4 min). ⚠️ **Known risk:** the same package scored **0** in 012496d3 (clerk omit loop, see problem P1). Fix dba5e72 is in test |
+| **Leaderboard** | **#7**, 100, $0.164, 8:21. Ranking between equal quality = **cost × time** (fits every pair on the board): we are at 1.37; #6 AdminRights 1.16, #5 EliTUM 1.11, #4 error404 0.83. The top three are at 0.03-0.25 |
+| **Promotions** | The organisers promote our better test runs to submissions themselves (44a626ef, then 1b83cba3 + 9902e32b, then 4876a0ad). **A test run can become our final package**: only test code we would be happy to see in the final |
+| **Branches** | `maria/escalation` (all robustness fixes + clerk fixes, last dba5e72) → `maria/cost` (+ cost cuts, last 8e19c98). Neither merged to main; main (d72deb8) has none of these fixes |
+| **Winners** | Picked on the private dataset first, then public, then elegance. Robustness first, then cost × time |
+
+### Open problems
+
+| # | Problem | Status |
+|---|---|---|
+| P1 | **Clerk loops on the bid form** (d3ca14df, 8a2e1426, 012496d3: all 0). Root cause found: the `steps` chain reported the form's "position added" notice as an error, the clerk entered the position again, the form refused; the omit cap of fc54a43 then turned the refused omit into a loop | 🟨 dba5e72: notice reported neutrally, "a saved position may empty its fields: go on", one more omit after each circle hint. 3 sandbox runs running (7dbf1540, bf29711e, 608c82d7) |
+| P2 | **Sandbox infrastructure**: tender-portal / mail outages, platform failures, model overload (8a2e1426 mail down, d8fdffff platform failure) | Not ours. Browser failover (288c88c) helps when only one browser is affected |
+| P3 | **Cost**: ERP is 46% of all input tokens (828k of 1.8M in 4876a0ad, ~14k per call); prompt caching is unreliable (local probe: identical prompts mostly 0 cached) | 🟨 history cut done (9105e5e, $0.31 → $0.16); page-text trimming next |
+| P4 | **Time**: investigation 220-370 s, form + TAN 160-280 s | ⬜ start agents during the context call, ERP sooner |
+| P5 | Scanned PDFs (no OCR) on the private dataset | ⬜ optional |
+
+### Next tasks
+
+| Task | Owner | Status |
+|---|---|---|
+| Confirm the clerk fix dba5e72 in the sandbox (3 runs) | Maria | 🟨 running |
+| Page-text trimming (repeated menus, long lists) measured on local traces, then 2 sandbox runs | Maria | 🟨 local trace run going |
+| Decide the final package: resubmit `maria/cost` with dba5e72 once confirmed (or let a promoted run replace it) | **Maria + Vamshidhar** | ⬜ needs the go |
+| Speed: agents start during the context call; ERP starts sooner | Maria | ⬜ |
+| Pitch: story of the architecture, the fair-play design, the cost × time work | Iga, Ravindra | ⬜ |
 
 ## Owners
 
@@ -11,7 +41,16 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 10 Oct 2026,
 | Builder 3: tests / QA | Vamshidhar | Calculator edge-case tests, the latent calculator bugs, the failing `test_browser_env` tests, fair-play check before every submit | Test suite green, latent bugs fixed |
 | Pitch & story | Iga, Ravindra | Pitch skeleton, 2-minute story, likely jury questions; organiser questions (pitch format, submission cut-off time) | Draft ready for team review |
 
-## Current priorities (19:15)
+## Priorities (since 10 Oct 19:15; statuses updated 11 Oct 04:00 UTC)
+
+| # | What | Status (11 Oct) |
+|---|---|---|
+| 19 | **Page-text trimming** (ERP pages ~14k tokens per call) | 🟨 Maria, measuring on local traces |
+| 18 | **Cost: one past page in full instead of two** (`FULL_TURNS`, `maria/cost` 9105e5e) + input tokens per agent in the run summary | ✅ $0.31 → **$0.16** at 100 (4876a0ad, promoted to sub_973a02b5). Brief guide tried and dropped (only 28% shorter, +12 s) |
+| 17 | **Clerk omit cascade / omit loop** (8a2e1426, 012496d3) | 🟨 fc54a43 (start the stuck position over, omit cap) → dba5e72 (neutral notice, omit allowance per circle); in test |
+| 10-16 | Stuck investigators, idle-wake, browser failover, escalation, `steps`, routing fallback | ✅ in the sandbox: `maria/escalation` scored 100 in 8 of 10 valid runs (both 0s were clerk loops, P1); fastest 6.3 min (9902e32b) |
+
+Earlier list (10 Oct, 19:15):
 
 Baseline: **70.7** reproduced twice with the same answer (runs 8184b178, 3c3568bb); the same code also scored 29.1
 (run 9c8fe292). So the work now is the last position **and** making good runs the normal case.
@@ -59,6 +98,18 @@ So the cost is mostly every turn re-sending the whole page, the case file and th
 by expected payoff: (1) fewer turns (loops stopped), (2) smaller prompts (trim page text and history, show each
 agent only its part of the case file), (3) more caching (keep the start of every prompt identical across turns),
 (4) fewer agents (less fixed context per agent, but a more sequential, slower run). Measure locally before changing.
+
+**Update 11 Oct, 04:00 UTC:**
+- **Caching cannot be planned for.** Probe through the local proxy: the same prompt sent 4× in a row was cached 0, 0,
+  5,888 and 1,600 tokens; a growing conversation hit only now and then. So lever (3) is out; only fewer input
+  tokens count.
+- **Ranking = cost × time** between equal quality, so 10% less cost is worth as much as 10% less time.
+- **Measured per agent** (run summary now shows input tokens per caller; run 4876a0ad, 1.8 M input in all):
+  ERP **828k (46%)**, mail 313k, tender portal 205k, customer portal 192k, clerk 165k, extraction only 76k,
+  courier 13k. The brief is ~2.8k tokens per call (the investigators' system prompt ~6k in all).
+- **Done:** one past page in full instead of two (9105e5e): **$0.31 → $0.16** at 100. Tried and dropped: a
+  model-written shorter brief for the investigators (only 28% shorter, +12 s, risk of losing a rule).
+- **Next:** trim the page text (ERP pages up to 14k characters per turn), then fewer ERP turns.
 
 ## Branch and bound, local (21:00 UTC, no sandbox runs while the organisers refresh)
 
@@ -199,8 +250,8 @@ Leaderboard (19:00 UTC): isar-labs **100 in 6:22 / $0.09**, AdminRights 100 in 1
 |---|---|---|
 | 🟢 Minimum | Eligible signed bid (correct tender reference) on the public dataset | ✅ reached 17:34 (test run 6da03229: eligible, quality 10; the bid was signed but empty) |
 | 🟡 Good | Quality ≥ 80 in a test run, run time < 12 min | ✅ **98.7 in 10.1 min** (run 60233f96, b8f3228), but not reliable yet (next runs 22.8, 0) |
-| 🔵 Target | Quality ≥ 95, < 8 min, low cost (Qwen first), 3 test runs in a row without a crash | 🟨 **100** once (12.4 min) and 98.7 once; < 8 min not yet (board leader: 100 in 7:19); 3 in a row not yet |
-| ⭐ Final-ready | Nothing layout-specific in the code; passes the AI review; clean README | 🟨 package scan clean before every test run; README describes the architecture; AI review not yet tried (no `atira submit` yet) |
+| 🔵 Target | Quality ≥ 95, < 8 min, low cost (Qwen first), 3 test runs in a row without a crash | 🟨 (11 Oct) **100 many times**; < 8 min reached (6.3 and 6.6 min, fc54a43); 3 in a row reached (e.g. 11adf2a5 → 1b83cba3 → 9902e32b, on clean infrastructure); low cost $0.16 (9105e5e). Open: the clerk-loop 0s (P1) |
+| ⭐ Final-ready | Nothing layout-specific in the code; passes the AI review; clean README | 🟨 every submission passed the AI review; package scan clean before every run; overfitting checks with invented data (see below). Open: README refresh for the final |
 
 ## Milestones
 
@@ -213,8 +264,8 @@ Status: ⬜ open · 🟨 in progress · ✅ done · ⛔ blocked
 | M2 | Facts collected | Every site agent files its facts into the case file; they match the facts checked by hand | 🟨 reached in run 60233f96 (all facts but the free stock behind one lead time); not yet in every run. Free stock and Q&A units fixed since (2d96c95, merged) |
 | M3 | Calculator correct | All rules implemented and unit-tested; a complete bid from correct facts | ✅ 100/100 against our reference answer, also after every merge · latent edge cases open (Vamshidhar) |
 | M4 | First full bid | Test run: quality ≥ 80, all positions filled, signed | ✅ 98.7: all 5 positions, signed (run 60233f96, 17:04 UTC) |
-| M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | 🟨 quality ≥ 95 once; robustness: timeouts, tab renewal, agent restart, coverage gate, evidence conflicts, sanity plugins. Open: reliability (3 in a row), speed (< 8 min) |
-| M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | 🟨 **first submission sent** (sub_4c6ef121 = 2d330db, measured 100), review pending; cut-off time still unknown |
+| M5 | Hardened | Quality ≥ 95, < 8 min, 3 clean runs in a row; time guard tested with a forced short deadline | 🟨 (11 Oct) quality 100, < 8 min and 3 clean in a row all reached on `maria/escalation`; robustness fixes 10-16 confirmed. Open: clerk loop P1 (fix dba5e72 in test) |
+| M6 | Final freeze | Last `atira submit` passes review; README final; Entire checkpoints pushed; best-of-3 confirmed (already set) | 🟨 (11 Oct) 13 submissions, all passed review; final package now sub_973a02b5 (`maria/cost` 9105e5e, known clerk-loop risk). Open: resubmit with dba5e72 once confirmed (Maria + Vamshidhar); cut-off time still unknown |
 
 ## Timeline and approach (10 Oct, local time)
 
@@ -280,19 +331,19 @@ Comparison runs (fill in): same commit, `SANITY_CHECKS=default` vs `none` → qu
 
 - Branch off `main`, pull before you push, small commits, and put the measured effect in the commit message.
 - **Nobody runs `atira submit` without Maria's go.** Our latest submission that passes review goes into the final, so no experimental submissions.
-- **Only Maria starts sandbox test runs**, one at a time: all runs share the team's model limit (32 calls at once).
+- **Only Maria and Vamshidhar start sandbox test runs** (at most 3 queued per team). Every run goes into the score log the moment it is sent. **A test run that scores better can be promoted to a submission by the organisers, so it may become the final package.**
 - Fair play: the model must choose navigation, searches and documents. No fixed click paths, no crawlers, and **no scenario values** (tender references, material numbers, keys, prices, logins) anywhere in `starter-kit/`, including tests and comments. Tests use invented values.
 - Never `--no-verify`: Entire needs its git hooks to link sessions to commits. Start your coding agent inside the repo folder so its session is captured.
 
-## Status
+## Status (11 Oct, 04:00 UTC)
 
 | Done | Next |
 |---|---|
-| Model-directed agent: site agents, shared case file, deterministic calculator, submitter | First sandbox test run of this version (running) |
-| Calculator verified to the cent against our reference answer | First `atira submit` after the test run (go/no-go: Maria) |
-| Mail access-check loop fixed; failed extractions are retried; timeout split for thinking / non-thinking calls | All 5 positions priced (Puneetha) |
-| Local scorer and replay tool in `tuning/` | Edge-case tests and latent bugs (Vamshidhar) |
-| Local runs: best 29.75 / 100 in ~14 min | OpenAI vs Qwen for extraction (Maria); pitch (Iga, Ravindra) |
+| Model-directed agent (site agents, shared case file, deterministic calculator, clerk + courier), 100 on the public data many times | Confirm the clerk fix dba5e72 (3 runs going) |
+| Robustness: stuck/idle investigators, browser failover, escalation, routing by role + fallback, document formats, number formats | Resubmit with dba5e72 once confirmed (Maria + Vamshidhar decide) |
+| Speed: `steps` action, bid form 16 turns / ~160 s; best run 6.3 min | Agents start during the context call; ERP sooner |
+| Cost: $0.31 → $0.16 (history cut); input tokens per agent in every run summary | Page-text trimming, then fewer ERP turns |
+| Overfitting checks with invented data (calculator, site names, formats, number formats) | OCR for scanned PDFs (optional); README for the final; pitch (Iga, Ravindra) |
 
 ## Useful commands
 
