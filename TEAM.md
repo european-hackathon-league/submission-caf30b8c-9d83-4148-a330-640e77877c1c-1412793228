@@ -21,12 +21,14 @@ the private dataset"**, so this is the closest we get to testing for it. CLI upg
 | Eval | What | Runs |
 |---|---|---|
 | `quotecraft-variant-a` (ev_4e00776148892811, private; `evals/variant-a` on branch `maria/evals`) | The organisers' starter world: four simple sites, invented data, positions 10/20/30, fewer rules (no pressure, no catalogue group), a superseded spec revision, a quantity change **by mail**, a blocked material | **Final package: 0, 0. d9bb4e5: 0, 0.** All facts found, but the calculator matched **no material**: the spec states no pressure and `matches()` required equal pressure. Also the mail's quantity change was ignored (only Q&A counted) and a plain "Bestand 40 Stk" was not taken as free stock. **Fixed in f4e04d2** (escalation) / 8d1f0b5 (cost); fixed code running on it (2 runs) |
-| `quotecraft-variant-b` (private; `evals/variant-b`) | Harder, in the private dataset's direction: other site names (`beschaffung`, `lieferantenportal`, `warenwirtschaft`, `postfach`), discount approval in the ERP (not mail), quantity change as an amendment notice on the buyer portal ("1.040 Stück"), ERP record over three tabs, a draft spec revision, reference with a slash (AZ-2027/0815), positions 1.1/1.2/2.1 | Final package: **0** (1st run); d9bb4e5 running |
+| `quotecraft-variant-b` (private; `evals/variant-b`) | Harder, in the private dataset's direction: other site names (`beschaffung`, `lieferantenportal`, `warenwirtschaft`, `postfach`), discount approval in the ERP (not mail), quantity change as an amendment notice on the buyer portal ("1.040 Stück"), ERP record over three tabs, a draft spec revision, reference with a slash (AZ-2027/0815), positions 1.1/1.2/2.1 | **Final package: 0.** Navigation was fine (all articles, the approval and the notice were found and filed in 149 s), but: (1) no pressure in the spec → no match (as A); (2) the change notice was filed among the revisions as "current" and **became the governing revision**; (3) its quantity change was lost; (4) the ERP's approval register was filed as mail and **extracted as nothing** (discount 0). **Fixed in 568b228** (escalation) / **f851d41** (cost). d9bb4e5 and 8d1f0b5 also running on it |
 | next: `variant-c` | Our hand-priced invented tender (`test_invented_tender.py`) as a world: the full rule set on new pages | ⬜ |
 
 Commands: `atira eval run <slug> --package submission|test|<dir> --repeats 1-3`, `atira eval runs <slug>`.
 Limits: 10 evals per team, 12 eval runs an hour; up to 12 test + eval runs at a time. Model calls are now ~2.2×
 faster and up to 64 Qwen calls can run at once.
+
+**Fix line for the evals:** f4e04d2 (pressure optional, quantity change by mail, plain stock figure) → 568b228 (approval registers, change notices, governing revision) on `maria/escalation`; merged into `maria/cost` = **f851d41**. All tests pass, golden check exact. Eval runs are limited to 12 an hour: f851d41 goes on both variants at ~05:38 UTC.
 
 ### Open problems
 
