@@ -71,6 +71,15 @@ class FileEach(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(seen), 6)  # every opened page counts as seen for the coverage gate
         self.assertIn('"M-100"', result)
 
+    async def test_the_ids_are_those_of_the_page_the_model_saw(self):
+        # a list that loaded more rows after the model's read numbers them differently on a fresh read
+        site, filed, seen = FakeSite(), [], []
+        model_saw = 'url: http://erp.test/search?group=G-1\n[3] link "M-200" -> /record?m=M-200'
+        await file_each(site, {"do": "file_each", "links": [3], "kind": "material"},
+                        lambda kind, text, source: filed.append((kind, source)) or "filed", seen.append,
+                        time.time() + 600, model_saw)
+        self.assertEqual(filed, [("material", "http://erp.test/record?m=M-200")])
+
     async def test_an_id_that_is_not_a_link_is_reported_not_guessed(self):
         _, filed, _, result = await self.run_action({"do": "file_each", "links": [9, 5], "kind": "material"})
         self.assertEqual(filed, [])

@@ -161,7 +161,7 @@ FILE_EACH_LIMIT = 12  # records per file_each action
 FILE_EACH_SECONDS = 150  # and seconds for all of them; the agent continues from the list afterwards
 
 
-async def file_each(tab, action: dict, file, saw, deadline: float) -> str:
+async def file_each(tab, action: dict, file, saw, deadline: float, seen: str = "") -> str:
     """The file_each action: the model names several records on the page in front of it (links by id) and, if each
     record has tabs that matter, the tabs by label; code opens every record and tab and files it with the kind the
     model gave, then goes back to the list. The model chooses the records and kinds, as with keep; this only saves
@@ -172,9 +172,12 @@ async def file_each(tab, action: dict, file, saw, deadline: float) -> str:
     if not links or not kind:
         return 'file_each needs "links" (ids of the records on this page) and "kind"'
     home = tab.page.url
-    page = await tab.observe()
+    # The ids and link targets of the page the model saw when it chose (`seen`); a fresh read could number the
+    # elements differently (a list that loads or reorders), and the wrong record would be filed.
+    page = seen or await tab.observe()
     targets = {m.group(1): (m.group(3), (re.search(r"->\s*(\S+)", m.group(4)) or [None, None])[1])
                for m in CONTROL.finditer(page) if m.group(2) in ("link", "clickable")}
+    first = True
     stop_at = min(deadline, time.time() + FILE_EACH_SECONDS)
     report = []
     for aid in links:
@@ -185,6 +188,15 @@ async def file_each(tab, action: dict, file, saw, deadline: float) -> str:
         if label is None:
             report.append(f"[{aid}] is not a link on this page")
             continue
+        if not href and not first:  # a link without an address: find it again by its label on the list as it is now
+            if tab.page.url != home:
+                await tab.goto(home)
+            aid_now, why = find_control(await tab.observe(), label, ("link", "clickable"))
+            if aid_now is None:
+                report.append(f'[{aid}] "{label}" not opened: {why}')
+                continue
+            aid = aid_now
+        first = False
         opened = await (tab.goto(href) if href else tab.click(aid))
         record = await tab.observe()
         saw(record)
@@ -245,7 +257,7 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
 
     async def file_each_action(action: dict) -> str:
         return await file_each(tab, action, lambda kind, text, source: case.file(kind, text, source, name),
-                               agent.coverage.saw, deadline)
+                               agent.coverage.saw, deadline, agent.page_seen)
 
     async def answer(action: dict) -> str:
         # A completion action can arrive in the same turn as `keep`. Wait for this agent's own
