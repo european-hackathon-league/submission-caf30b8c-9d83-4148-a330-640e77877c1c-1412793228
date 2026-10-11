@@ -282,10 +282,11 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([step for step in tender.done if step == ("click", 7)], [("click", 7)])
         self.assertIn("blocked", script.turns("submit")[3]["user"])
 
-    async def omitting(self, seconds: float, replies: list[dict]) -> tuple[FakeTab, Script]:
+    async def omitting(self, seconds: float, replies: list[dict], position: str = "1") -> tuple[FakeTab, Script]:
         script = Script(submit=[*replies, done(summary="stopped")])
-        tender = FakeTab("tender", 'Position\n[21] button "Position auslassen (Teilpunkte)"\n[24] button "Weiter"\n'
-                                   '[25] input "Menge"')
+        tender = FakeTab("tender", f'Position {position}\n[21] button "Position auslassen (Teilpunkte)"\n'
+                                   '[24] button "Weiter"\n[25] input "Menge"')
+        tender.document = tender.view  # the page as last read, as Tab.observe keeps it
         with patch.object(llm, "chat_json", script):
             await submit.submit_bid(tender, FakeTab("mail"), a_bid(), CONTEXT, "THE BRIEF", time.time() + seconds)
         return tender, script
@@ -303,6 +304,12 @@ class EnteringTheBid(unittest.IsolatedAsyncioTestCase):
         # a_bid() has one position the calculator left out, so two omits are allowed and the third is refused
         self.assertEqual([step for step in tender.done if step == ("click", 21)], [("click", 21)] * 2)
         self.assertIn("has its values on the bid sheet", script.turns("submit")[5]["user"])
+
+    async def test_a_form_position_that_is_not_on_the_bid_sheet_may_always_be_left_out(self):
+        # run 9ac58b69: the form held an extra position the bid does not have; leaving it out is right
+        tender, script = await self.omitting(900, self.one_after_another(), position="EXTRA-9")
+        self.assertEqual(len([step for step in tender.done if step == ("click", 21)]), 3)
+        self.assertNotIn("has its values on the bid sheet", "".join(t["user"] for t in script.turns("submit")))
 
     async def test_a_clerk_caught_going_in_circles_again_may_leave_out_one_more(self):
         # run 012496d3: stuck on a second position, the refused omit became a loop of its own

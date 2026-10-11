@@ -225,7 +225,12 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
                     "and say exactly what to look for: the newest code mail for this tender.")
         if label and bid.decision == "bid" and OMIT_CONTROL.search(label):
             stuck_again = clerk.circle_hints > omits["hints"]  # caught going in circles since the last omit
-            if (omits["count"] >= len(bid.omitted) + 1 and not stuck_again
+            # A position the form adds that is not on the bid sheet (run 9ac58b69: an extra form position) is left
+            # out as it should be: the cap is only for a page that shows one of the bid's priced positions.
+            page = str(getattr(tender_tab, "document", "") or "")
+            priced_here = any(re.search(rf"(?<![\w.]){re.escape(str(line.position))}(?![\w.])", page)
+                              for line in bid.lines)
+            if (priced_here and omits["count"] >= len(bid.omitted) + 1 and not stuck_again
                     and deadline - time.time() >= WRAP_UP):
                 return (f'blocked: "{label}" would leave out a position that has its values on the bid sheet. Only '
                         "the one position you were stuck on may be left out. Enter this position with its values "
