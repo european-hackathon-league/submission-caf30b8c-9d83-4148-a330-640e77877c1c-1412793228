@@ -136,6 +136,34 @@ its package).
 Vamshidhar's go); (2) ERP `file_each` with paths and the clerk's `steps` used reliably (cost and time within fair play);
 (3) timeout tuning as its own measured experiment.
 
+### Second suggestion set: "deterministic fast path, LLM only for exceptions" (checked 11 Oct, 05:50 UTC)
+
+The deciding rule is the brief's **rule 11**: *"A language model must choose navigation targets, searches and relevant
+documents from observations at runtime and make the important decisions. Helpers **may** extract a selected page,
+parse a selected document, paginate a model-selected result set, calculate, validate, retry and fill forms. They
+**must not** autonomously discover and traverse the websites to assemble the complete task evidence before
+model-directed investigation."* And: *"hardcoded answers, fixed scripts and crawlers are rejected"* by the review. The
+private run uses **other software, layout, navigation and site names**.
+
+| Suggestion | Allowed by rule 11? | Works on the private sites? | Verdict |
+|---|---|---|---|
+| Navigation circuit breaker (commit → selector → direct URL once → renew tab once) | Yes (retry) | Yes, if generic | **Do, measured.** We already renew tabs; add a short commit wait + one direct-URL retry. Not a flat 8 s |
+| One extraction call per domain (collect, dedupe, batch) | Yes (extract selected pages) | Mostly | **Low payoff**: extraction is 5% of input tokens; batching mixes records and loses per-page provenance. Maybe later for time |
+| Mail: one broad search, local index, code ranks and opens the winners | Search yes; **code choosing which messages count = "important decisions"** | Ranking rules are public-1 rules | **Partly**: the model makes one broad search and files the hits with `file_each` (allowed: model-selected result set). The authority ranking already runs in code *after* filing (calculator) |
+| ERP route compiler (`/mm03`, `/vk13`, `/mmbe` loops, local table parsers) | **No**: fixed routes = fixed script / crawler | **No**: other ERP software | **Reject.** The allowed version is `file_each` with paths: the model walks one material, code replays the model's path for the others (492399c). Needs a prompt example so ERP actually uses it |
+| Scripted submission state machine from bid JSON | "fill forms" is allowed, a fixed per-form state machine is not, and it breaks on another bid form | No | **Reject the fixed machine.** We have the allowed version: `steps` (label-addressed, every step through the guard) + validation before signing |
+| Remove completed agents from the scheduler | Yes | Yes | **Not needed**: 1-2 "done" per agent per run (measured) |
+| Global budget (25 calls, later 8-12) | Yes | n/a | **Reject the hard cap**: our runs need 150-200 calls; a cap cuts the investigation and loses quality (first criterion). The clerk turn reserve (b615337) is the safe form of a budget |
+| State ledger + latest snapshot only | Yes | Yes | **Partly done**: the case file *is* the ledger; history capped at 10 turns. Next step possible: `FULL_TURNS=0` (only the newest page), measured |
+| Model ladder (small model for routine steps) | Yes | Yes | **Not available**: only Qwen and Clef (Clef dearer per input token) |
+| Stable-prefix caching | Yes | Yes | **Measured unreliable** on this provider (identical prompts mostly 0 cached); our prefixes are already stable |
+
+**Bottom line:** the proposed target architecture (deterministic collectors → one planning call → scripted submission)
+is what rule 11 forbids and what the private run would break. Our design is the allowed one: the model navigates and
+chooses, helpers extract, paginate, replay a model-chosen path, calculate, validate and fill. **Next allowed levers:**
+(1) ERP actually using `file_each` with paths, (2) the clerk using `steps` every time, (3) navigation circuit breaker,
+each measured separately (quality, time, calls, uncached tokens, cost).
+
 ## Where the cost goes (keep in mind for every change)
 
 Measured on the branch's 100 run 2b8b5ca8 ($0.31): **199 calls sent 2.48 M input tokens, about 12,400 per call,
@@ -209,6 +237,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 05:36 | run_76dc3099 | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | running | | | | Public check 4 |
+| 05:36 | run_e585d778 | Maria | `maria/cost` **1d0ecea** (all eval fixes; named "maria/cost 1d0ecea") | running | | | | Public check 3 |
 | 05:19 | **run_1470dade** | Maria | `maria/cost` **1d0ecea** (all eval fixes: pressure optional, mail quantity changes, plain stock, approval registers, change notices, revision ids; clerk turn reserve) | **100** | ✅ | ~12 min | 221 / $0.24 | Public check 2: no regression on public-1 |
 | 05:12 | **run_f402181d** | Vamshidhar | package 35eb499d = `maria/escalation` **fc54a43** | **100** | ✅ | 10 min | 249 / $0.29 | |
 | 04:55 | **sub_902fc357 (SUBMISSION, promoted by the organisers)** | Organisers | test run a176359f = `maria/cost` **f851d41** (package 2c82a7bf) | **100** | ✅ | 6:15 | 192 / $0.176 | **Now our final package.** Leaderboard: #7, $0.176, 6:15 |
