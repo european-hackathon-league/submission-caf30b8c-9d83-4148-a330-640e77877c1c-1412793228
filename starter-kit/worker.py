@@ -143,6 +143,7 @@ class Agent:
             "directly with goto, or try a different way. If you already have the answer, finish with done now.")
         self._circle_hint: str | None = None  # a sanity check that may veto a browser action before it runs (sanity.py)
         self.turns: list[dict] = []
+        self.after_steps: Callable[[list, str, str], Awaitable[str]] | None = None  # see _browser
         self.held: tuple[str, str] | None = None  # a collected or fetched document, until the agent moves on
         self.coverage = Ledger()  # what this agent really opened, typed and followed (coverage.py)
         self.steps = 0
@@ -259,7 +260,11 @@ class Agent:
         if do == "click":
             return await tab.click(action.get("id"))
         if do == "steps":
-            return await self._steps(action.get("steps") or [])
+            steps, before = action.get("steps") or [], self.tab.document  # the page as read at the start of the turn
+            result = await self._steps(steps)
+            if self.after_steps is not None:  # the clerk's automatic form replay (submit.py)
+                result = await self.after_steps(steps, before, result)
+            return result
         if do == "fill":
             return await tab.fill(action.get("id"), action.get("text", ""), bool(action.get("enter")))
         if do == "select":
