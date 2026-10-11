@@ -27,7 +27,8 @@ from browser_env import Tab
 from calculator import calculate_bid
 import sanity
 import validate
-from casefile import SHAPES, CaseFile, read_context
+from casefile import SHAPES, CaseFile, brief_intro, brief_rules, read_context, status_sections
+from gates import Gates
 from worker import ACTIONS_HELP, ACTIONS_HELP_RESEARCH, CONTROL, Agent, brief_for, find_control
 
 RESTART_MIN_SECONDS = 120  # an unfinished agent is restarted only while this much investigation time is left
@@ -37,9 +38,7 @@ engineering team. Each agent works a different website at the same time; you wor
 in your own browser tab. Together you must find every fact the bid rules need. You only find and file evidence:
 you never calculate prices.
 
-TASK BRIEF (the rules are authoritative)
 {brief}
-END OF BRIEF
 
 {actions}
 Case-file actions:
@@ -104,6 +103,48 @@ How to work
   facts the other agents have not filed yet. You are called again as soon as the case file brings new questions.
   Never idle with wait and never browse around to pass the time.
 """
+
+
+def _bullet(text: str, start: str) -> str:
+    """The bullet of `text` that begins with `start`, with its indented continuation lines."""
+    begin = text.find("- " + start)
+    if begin < 0:
+        return ""
+    end = re.search(r"\n(?! )", text[begin:])
+    return text[begin:begin + end.start()] if end else text[begin:]
+
+
+# The trap guidance is shown from gate 1 on (gates.py), not in every call; the escalated turn has the full prompt.
+TRAP_GUIDANCE = _bullet(INVESTIGATOR, "The websites hold traps")
+INVESTIGATOR_LEAN = INVESTIGATOR.replace(TRAP_GUIDANCE + "\n", "") if TRAP_GUIDANCE else INVESTIGATOR
+FULL_BRIEF = "TASK BRIEF (the rules are authoritative)\n{brief}\nEND OF BRIEF"
+INVESTIGATOR_DROP = ("submission", "abgabe", "einreichung")  # sections of the brief no investigator needs
+# Which case-file sections a website's role concerns (the role comes from the context, SITE_ROLES), shown from gate 1
+# on next to the sections of the agent's own questions.
+ROLE_SECTIONS = {"erp": {"requirements", "materials"}, "mail": {"authorities"}}
+# A news item that says an extraction brought nothing usable: trouble (gates.py).
+BAD_NEWS = re.compile(r"(?i)extraction failed|no usable records|nothing usable|schema validation rejected")
+
+# A soft budget for the run's input tokens (llm.STATS["prompt_tokens"]). From BUDGET_NEAR of it on, investigators are
+# told to file what they have and finish; from all of it on, an investigator whose documents are not being read
+# finishes before its next model call. The bid clerk and the courier are exempt: a signed bid must still happen.
+# TOKEN_BUDGET=0 turns it off.
+BUDGET_NEAR = 0.9
+BUDGET_LINE = "TOKEN BUDGET NEARLY USED: file what you have, answer your questions, finish with done (no new searches)."
+BUDGET_LOGGED: set[str] = set()  # "near" once logged
+
+
+def token_budget() -> int:
+    try:
+        return int(os.environ.get("TOKEN_BUDGET", "1100000"))
+    except ValueError:
+        return 1_100_000
+
+
+def budget_used() -> float:
+    """The share of the run's input-token budget used so far (0 without a budget)."""
+    budget = token_budget()
+    return llm.STATS.get("prompt_tokens", 0) / budget if budget > 0 else 0.0
 
 
 class Team:
@@ -413,13 +454,33 @@ class WalkRecorder:
 
 def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent:
     name = tab.site_id
-    system = INVESTIGATOR.format(site=name, url=tab.base_url, actions=ACTIONS_HELP_RESEARCH,
-                                 brief=brief_for(case.brief, drop_sections=("submission", "abgabe", "einreichung")))
+    gates = Gates()
+    full_system = INVESTIGATOR.format(site=name, url=tab.base_url, actions=ACTIONS_HELP_RESEARCH,
+                                      brief=FULL_BRIEF.format(brief=brief_for(case.brief, drop_sections=INVESTIGATOR_DROP)))
+    # The task card instead of the whole brief (gates on): what the model read from the brief at the start, and the
+    # brief's own task paragraph. Without a card (the context has no tender reference) the whole brief, as before.
+    card = ""
+    if isinstance(case, CaseFile):
+        card = case.task_card(brief_intro(brief_for(case.brief)), {role: site for role, site in SITE_ROLES.items() if site},
+                              mail=site_role(name) == "mail")
+    rules_brief = brief_for(case.brief, drop_sections=INVESTIGATOR_DROP + ("access", "zugang"))
+    system = full_system if gates.full() else INVESTIGATOR_LEAN.format(
+        site=name, url=tab.base_url, actions=ACTIONS_HELP_RESEARCH,
+        brief=card or FULL_BRIEF.format(brief=brief_for(case.brief, drop_sections=INVESTIGATOR_DROP)))
 
-    def briefing() -> str:
+    def case_view(sections: set[str] | None) -> str:
+        return case.status(sections) if isinstance(case, CaseFile) else case.status()
+
+    def briefing(full: bool = False) -> str:
         questions = questions_for_site(name, case.questions())
         news = case.take_news(name)
-        text = f"CASE FILE\n{case.status()}\n\nOPEN QUESTIONS\n"
+        if any(BAD_NEWS.search(item) for item in news):
+            gates.trouble("an extraction found nothing")
+        gate = 2 if full or gates.full() else gates.gate
+        ids = [qid for qid, _ in questions]
+        sections = (None if gate >= 2 else set() if gate == 0
+                    else status_sections(ids, filed_kinds) | ROLE_SECTIONS.get(site_role(name) or "", set()))
+        text = f"CASE FILE\n{case_view(sections)}\n\nOPEN QUESTIONS\n"
         # The mailbox agent sees every record it still needs at once, with the brief's subject word and sender,
         # so that it can plan its searches (sandbox runs 9ac58b69, 472732d2, 63f3be2e: 25-46 turns of guessing).
         checklist = case.mail_checklist(questions) if site_role(name) == "mail" else ""
@@ -436,6 +497,18 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         tip = walks.tip(agent.page_seen) if questions else ""
         if tip:
             text += "\n\n" + tip
+        if gate == 1:  # trouble: what helps to judge a record, and the brief's rules on these questions
+            if TRAP_GUIDANCE:
+                text += "\n\nWHEN YOU CHECK A RECORD\n" + TRAP_GUIDANCE[2:]
+            rules = brief_rules(rules_brief, ids) if ids else ""
+            if rules:
+                text += "\n\nTHE BRIEF'S RULES ON YOUR QUESTIONS\n" + rules
+        if budget_used() >= BUDGET_NEAR:
+            text += "\n\n" + BUDGET_LINE
+            if "near" not in BUDGET_LOGGED:
+                BUDGET_LOGGED.add("near")
+                print(f"[{name}] token budget: {llm.STATS.get('prompt_tokens', 0)} of {token_budget()} input tokens "
+                      "used; investigators are told to finish", flush=True)
         return text
 
     agent: Agent
@@ -457,6 +530,8 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         pages = [] if agent.held else agent.trail_pages()
         paged = len(pages)
         res = filing(kind, document, source)
+        if not res.startswith("filed"):
+            gates.trouble("a keep was refused")
         if kind in SHAPES:
             walks.kept(kind, agent.held is not None)
         if res.startswith("this document is already filed"):
@@ -522,6 +597,12 @@ def investigator(case: CaseFile, team: Team, tab: Tab, deadline: float) -> Agent
         return None
 
     agent.on_action = note_walk
+    gates.log = agent.log
+    agent.gates = gates
+    agent.full_system = full_system
+    agent.full_briefing = lambda: briefing(full=True)
+    agent.stop_when = lambda: ("token budget used up" if token_budget() > 0 and budget_used() >= 1
+                               and not case.pending_for(name) else None)
     return agent
 
 
@@ -594,12 +675,15 @@ async def solve(task: dict, playwright) -> dict | None:
     SITE_ROLES.clear()
     RELEASED.clear()
     WALKS.clear()
+    BUDGET_LOGGED.clear()
     SITE_ROLES.update({role: str(context.get(f"{role}_site") or "") for role in ("erp", "mail")
                        if str(context.get(f"{role}_site") or "") in {site["siteId"] for site in sites}})
     case = CaseFile(brief, context)
     print(f"Sanity checks on: {', '.join(sanity.active()) or 'none'}", flush=True)
     print(f"Context: tender {case.reference}, scenario {case.scenario.isoformat()}, company {case.company}, "
           f"senders {case.senders}, subjects {case.subjects}", flush=True)
+    print(f"Context gates {'on' if Gates().enabled else 'off (full context every turn)'}; token budget "
+          f"{token_budget() or 'off'}", flush=True)
 
     left = contract.seconds_left(task)
     budget = min(left, 20 * 60) if left != float("inf") else 20 * 60  # a scored run has 20 minutes

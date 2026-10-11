@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from decimal import Decimal
@@ -49,6 +50,30 @@ UNPROVEN_REFUSALS = 2
 # Entering a bid is reading a form and copying values: without the model's long reasoning a turn takes about half
 # the time, and the reply's "thought" still leaves it room to check a conversion.
 CLERK_THINKS, COURIER_THINKS = False, False
+
+# The clerk needs the brief's part on how to submit, not its bid rules (the bid sheet carries their result): the
+# sections whose heading names the submission, plus the rule lines on leaving positions out. A brief without such a
+# heading is kept whole (credentials removed either way). CONTEXT_GATES=0 brings back the whole brief.
+SUBMISSION_HEADING = re.compile(r"(?im)^(#{1,6})[^\n]*(?:submission|abgabe|einreichung)[^\n]*$")
+OMIT_RULE = re.compile(r"(?i)partial submission|teilabgabe|teilpunkte|\bomit|auslass|weglass")
+
+
+def clerk_brief(brief: str) -> str:
+    text = brief_for(brief)
+    if os.environ.get("CONTEXT_GATES", "1").strip() == "0":
+        return text
+    spans: list[tuple[int, int]] = []
+    for heading in SUBMISSION_HEADING.finditer(text):
+        if any(start <= heading.start() < end for start, end in spans):
+            continue  # a sub-heading of a section already taken
+        level = len(heading.group(1))
+        after = re.compile(rf"(?m)^#{{1,{level}}}\s").search(text, heading.end())
+        spans.append((heading.start(), after.start() if after else len(text)))
+    if not spans:
+        return text
+    taken = "\n\n".join(text[start:end].strip() for start, end in spans)
+    rules = [line.strip() for line in text.splitlines() if OMIT_RULE.search(line) and line.strip() not in taken]
+    return taken + ("\n\nRules on leaving positions out:\n" + "\n".join(rules) if rules else "")
 
 CLERK = """You are the bid clerk of a manufacturer's sales engineering team. Your colleagues have researched a
 public tender and a calculator has priced it: the BID SHEET below is the final result. You work the tender portal
@@ -545,7 +570,7 @@ async def submit_bid(tender_tab: Tab, mail_tab: Tab | None, bid: Bid, context: d
 
     bidder = {"company": context.get("company"), "vat_id": context.get("vat_id"), "email": context.get("email")}
     sheet = bid_sheet(bid)
-    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=brief_for(brief), reference=reference,
+    system = CLERK.format(site=tender_tab.site_id, url=tender_tab.base_url, brief=clerk_brief(brief), reference=reference,
                           bidder=json.dumps(bidder, ensure_ascii=False, indent=1),
                           sheet=json.dumps(sheet, ensure_ascii=False, indent=1), actions=ACTIONS_HELP)
     if sanity.enabled("no_guessed_mailbox") and not bidder.get("email"):
