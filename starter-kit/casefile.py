@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -131,17 +132,60 @@ CONTEXT_SHAPE = """From the task brief, as JSON:
  "authorized_subjects": {"discount_approval": "<the subject word the brief names for these messages>",
    "condition_rules": "...", "price_indices": "...", "tech_release": "...", "packaging_tariffs": "...",
    "delivery_release": "...", "fx_fixing": "...", "setup_pools": "...", "project_bonus": "..."},
- "mail_search_hint": "<the brief's own advice on how to search the mailbox, in one short sentence, or null>"}
+ "mail_search_hint": "<the brief's own advice on how to search the mailbox, in one short sentence, or null>",
+ "record_sites": {"<topic>": "<site id>"}}
 The local part is what stands before the @; null for a topic the brief names no sender for. A subject word is the
 message subject or document name the brief gives for that topic (for example in a list of subject/sender pairs, or
 "the latest <subject> message"), copied exactly as written, without the tender reference; null when the brief names
-none."""
+none. record_sites: only a topic whose records the brief says are kept on a website OTHER than the mailbox (for
+example an approval register in the ERP), with that website's id; leave out every other topic ({} when none)."""
 
 # The open questions that ask for a mail record, by question id prefix, and the brief's topic that authorizes it.
 MAIL_QUESTION_TOPICS = {"discount": "discount_approval", "condition_group": "condition_rules",
                         "packaging_tariff": "packaging_tariffs", "delivery_commitment": "delivery_release",
                         "setup_pool": "setup_pools", "project_bonus": "project_bonus", "index": "price_indices",
                         "fx": "fx_fixing", "reserve": "tech_release"}
+
+
+def mail_topic(qid: str) -> str | None:
+    """The brief's topic of a question whose evidence is a mail record ("search:<topic>" asks for one search of a
+    prescribed topic); "" for the mailbox address itself; None for every other question."""
+    prefix, _, key = qid.partition(":")
+    if prefix == "mailbox":
+        return ""
+    if prefix == "search":
+        return key if key in TOPICS else None
+    return MAIL_QUESTION_TOPICS.get(prefix)
+
+
+_FOLD = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
+
+
+def _words(text: str) -> list[str]:
+    """Search words in one spelling: case and umlauts folded, punctuation dropped."""
+    return re.findall(r"[a-z0-9]+", str(text or "").casefold().translate(_FOLD))
+
+
+def mentions(text: str, word: str) -> bool:
+    """Whether a search text names a subject word: the word itself, also with its umlauts written out or dropped,
+    or a cut-off form of at least five letters (a singular, a stem)."""
+    if not _words(word):
+        return False
+    for spelling in (text, _plain(text)):
+        typed = _words(spelling)
+        joined = " ".join(typed)
+        for target in (_words(word), _words(_plain(word))):
+            if f" {' '.join(target)} " in f" {joined} ":
+                return True
+            if len(target) == 1 and any(len(token) >= 5 and (target[0].startswith(token) or token.startswith(target[0]))
+                                        for token in typed):
+                return True
+    return False
+
+
+def _plain(text: str) -> str:
+    """The text with its accents and umlauts dropped (ü -> u), the other usual way to type them."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", str(text or "")) if not unicodedata.combining(ch))
 
 # The parts of the case-file status (CaseFile.status) and which of them an open question concerns, by its id prefix:
 # an investigator is shown the lines its own questions are about, not every other agent's facts. A question of a
@@ -164,7 +208,7 @@ def status_sections(question_ids, kinds=()) -> set[str]:
         prefix = str(qid).split(":", 1)[0]
         if prefix in QUESTION_SECTIONS:
             wanted.update(QUESTION_SECTIONS[prefix])
-        elif prefix in MAIL_QUESTION_TOPICS:
+        elif mail_topic(str(qid)) is not None:
             wanted.add("authorities")
         else:
             wanted.update(STATUS_SECTIONS)
@@ -244,7 +288,7 @@ def brief_rules(brief: str, question_ids, limit: int = RULES_LIMIT) -> str:
     for qid in question_ids:
         prefix = str(qid).split(":", 1)[0]
         words.update(QUESTION_WORDS.get(prefix, ()))
-        if prefix in MAIL_QUESTION_TOPICS:
+        if mail_topic(str(qid)):
             words.update(MAIL_WORDS)
     scored = []
     for index, unit in enumerate(units):
@@ -426,6 +470,13 @@ class CaseFile:
         subjects = subjects if isinstance(subjects, dict) else {}
         self.subjects = {topic: self._subject_word(subjects.get(topic)) for topic in TOPICS}
         self.mail_hint = _text(context.get("mail_search_hint")) or ""
+        # A topic the brief keeps on another website than the mailbox (an approval register in the ERP); the agent
+        # module keeps only real site ids of the run (solve).
+        places = context.get("record_sites")
+        places = places if isinstance(places, dict) else {}
+        self.record_sites = {topic: str(places[topic]).strip() for topic in TOPICS
+                             if isinstance(places.get(topic), str) and _text(places[topic])}
+        self.mail_searches: list[str] = []  # what the mail agent typed into the mailbox's search (note_search)
         self.mailbox: str | None = None
         self.positions: dict[str, dict] = {}
         self.clarifications: dict[str, dict] = {}
@@ -820,34 +871,84 @@ class CaseFile:
                  f"Search words: {self.reference} plus a subject word from the brief".strip()]
         if sender:
             parts.append(f"authorized sender: {sender}@{domain or '<bidder mailbox domain>'}")
-        parts.append("look in the inbox and the archive")
+        if not self.record_sites.get(topic):
+            parts.append("look in the inbox and the archive")
         return "; ".join(parts)
+
+    def mail_where(self, topic: str) -> str:
+        """Where a topic's record is kept, said in the question itself: run 72e78b8e's mail agent finished with the
+        reserve questions open, calling them records of the customer portal, and the ERP agent sent them back."""
+        site = self.record_sites.get(topic)
+        if site:
+            return f"Where: the website {site}, where the brief keeps these records."
+        return ("Where: the sales mailbox (inbox and archive); the brief prescribes a mail message for this, so it is "
+                "not a record of another website.")
+
+    def prescribed_topics(self) -> list[str]:
+        """The topics the brief names a subject word or an authorized sender for, in the brief's topic order."""
+        return [topic for topic in TOPICS if self.subjects.get(topic) or self.senders.get(topic)]
+
+    def note_search(self, text: str) -> None:
+        """Words the mail agent typed into the mailbox's search (or into an address it opened). A prescribed topic
+        whose subject word (or, without one, its sender) they name counts as searched."""
+        text = " ".join(str(text or "").split())
+        if not text or text in self.mail_searches:
+            return
+        before = self.searched_topics()
+        self.mail_searches.append(text)
+        if self.searched_topics() != before:
+            self._bump()
+
+    def searched_topics(self) -> set[str]:
+        found = set()
+        for topic in self.prescribed_topics():
+            word = self.subjects.get(topic) or self.senders.get(topic)
+            if any(mentions(text, word) for text in self.mail_searches):
+                found.add(topic)
+        return found
+
+    def filed_topics(self) -> set[str]:
+        """Topics a filed message is about (its topic, a block of facts for it, or the subject word in its subject),
+        whatever its reference or sender: the search for the topic found something."""
+        found = set()
+        for row in self.messages.values():
+            for topic in TOPICS:
+                word = self.subjects.get(topic)
+                if (row.get("topic") == topic or row.get(topic) or (topic == "discount_approval" and row.get("discount"))
+                        or (word and mentions(str(row.get("subject") or ""), word))):
+                    found.add(topic)
+        return found
 
     def mail_checklist(self, questions: list[tuple[str, str]]) -> str:
         """One view of every mail record still needed, by topic, so that the mail agent can plan its searches
-        instead of meeting the topics one question at a time. Empty when no mail record is asked for."""
+        instead of meeting the topics one question at a time. Empty when no mail record is asked for. A prescribed
+        topic nobody has searched for yet is on it too ("search:<topic>"), before any of its keys is known."""
         wanted: dict[str, list[str]] = {}
         for qid, _ in questions:
-            prefix, _, key = qid.partition(":")
-            topic = MAIL_QUESTION_TOPICS.get(prefix)
+            topic = mail_topic(qid)
             if topic:
                 wanted.setdefault(topic, [])
-                if key:
+                prefix, _, key = qid.partition(":")
+                if key and prefix != "search":
                     wanted[topic].append(key)
         if not wanted:
             return ""
         lines = ["MAIL CHECKLIST: every mail record still needed, one line per topic, with the subject word and "
                  "sender the brief prescribes. Plan before you search: one search per subject word (or one search "
-                 "on the reference alone, read page by page), then open each hit and file it with keep, or several "
-                 "hits of one result list with file_each. One message often defines several keys. A search that "
-                 "finds nothing is not repeated with the same words: change the words or the folder."]
+                 "on the reference alone, read page by page), in the inbox AND the archive, then open each hit and "
+                 "file it with keep, or several hits of one result list with file_each. One message often defines "
+                 "several keys. Search every topic marked NOT SEARCHED YET once now, before its keys are asked for: "
+                 "the positions will need them. A search that finds nothing is not repeated with the same words: "
+                 "change the words or the folder."]
         if self.mail_hint:
             lines.append(f"The brief on mail search: {self.mail_hint}")
+        searched = self.searched_topics() | self.filed_topics()
         for topic in TOPICS:
             if topic in wanted:
                 keys = sorted(set(wanted[topic]))
+                mark = "" if topic in searched or topic not in self.prescribed_topics() else " (NOT SEARCHED YET)"
                 lines.append(f"- {topic.replace('_', ' ')}" + (f" ({', '.join(keys)})" if keys else "")
-                             + f": {self.mail_search(topic)}")
+                             + f": {self.mail_search(topic)}{mark}")
         return "\n".join(lines)
 
     def questions(self) -> list[tuple[str, str]]:
@@ -856,7 +957,7 @@ class CaseFile:
         found: list[tuple[str, str]] = []
 
         def ask(qid: str, text: str) -> None:
-            if qid not in self.answers:
+            if qid not in self.answers and all(qid != earlier for earlier, _ in found):
                 found.append((qid, text))
 
         if not facts.positions:
@@ -884,7 +985,7 @@ class CaseFile:
         for ref, key in waiting.items():
             ask(f"reserve:{ref}", f"The technical release for specification revision {facts.governing} that gives the "
                                   f"per-end reserve ({key}): requirement {ref} states a usable travel. "
-                                  f"{self.mail_search('tech_release')}.")
+                                  f"{self.mail_ask('tech_release')}")
         assigned, _ = merged_assignments(answers)
         quantities, _ = final_quantities(facts.positions, answers, needs)
         matched: dict[str, Material] = {}
@@ -916,9 +1017,9 @@ class CaseFile:
                 ask(f"data:{material.number}", f"ERP material {material.number} (it matches requirement {ref}) still lacks: "
                                                f"{'; '.join(gaps)}.")
         if facts.authorities.discount_percent is None:
-            ask("discount", f"The sales director's most recent discount approval for exactly {self.reference} (inbox and "
-                            "archive). File the message; answer absent if no approval exists. "
-                            f"{self.mail_search('discount_approval')}.")
+            ask("discount", f"The sales director's most recent discount approval for exactly {self.reference}. File "
+                            "the approval; answer absent if no approval exists. "
+                            f"{self.mail_ask('discount_approval')}")
         labels = {"condition_group": ("the condition rules message", facts.authorities.clauses),
                   "packaging_tariff": ("the packaging tariffs message", facts.authorities.tariffs),
                   "delivery_commitment": ("the delivery release message", facts.authorities.commitments),
@@ -933,18 +1034,39 @@ class CaseFile:
                     if kind == "delivery_commitment" and need is not None and need.ref in matched:
                         extra = f" (the position's material is {matched[need.ref].number})"
                     ask(f"{kind}:{key}", f"For {self.reference}: {label} that defines {key}, assigned to position {position}{extra}. "
-                                         f"{self.mail_search(MAIL_QUESTION_TOPICS[kind])}.")
+                                         f"{self.mail_ask(MAIL_QUESTION_TOPICS[kind])}")
         for material in matched.values():
             if material.index_code and material.index_code not in facts.authorities.index_rates:
                 ask(f"index:{material.index_code}", f"For {self.reference}: the latest price index message with the rate of "
                                                     f"{material.index_code} (material {material.number}). "
-                                                    f"{self.mail_search('price_indices')}.")
+                                                    f"{self.mail_ask('price_indices')}")
+        # The FX rate for every candidate on file, not only the selected material: a foreign-currency condition cannot
+        # be priced without it, and asking only after the selection was too late in run 72e78b8e (never reached).
+        for material in sorted(facts.materials, key=lambda m: (m not in matched.values(), m.number)):
             for condition in material.conditions:
                 if condition.valid_on(self.scenario) and condition.currency != "EUR" and (condition.fx_key or "") not in facts.authorities.fx:
                     ask(f"fx:{condition.fx_key}", f"For {self.reference}: the FX fixing message with the rate of "
                                                   f"{condition.fx_key} ({condition.currency}, material {material.number}). "
-                                                  f"{self.mail_search('fx_fixing')}.")
+                                                  f"{self.mail_ask('fx_fixing')}")
+        # Every topic the brief prescribes a subject or sender for is searched once, early, before its keys are
+        # known (runs 72e78b8e, 65a5d83b: Technikfreigabe and Devisenfixing were never searched). A topic with a
+        # question of its own already open is asked there; the search question closes by itself once the mail agent
+        # typed the topic's subject word (or sender) into a search, or once a message about it is on file.
+        asked = {mail_topic(qid) for qid, _ in found}
+        done = self.searched_topics() | self.filed_topics() | {mail_topic(qid) for qid in self.answers}
+        for topic in self.prescribed_topics():
+            if topic not in asked and topic not in done:
+                subject = self.subjects.get(topic)
+                ask(f"search:{topic}", f"For {self.reference}: the {topic.replace('_', ' ')} records"
+                                       + (f" (subject {subject})" if subject else "") + ", searched once now even "
+                                       "though no position names one of their keys yet: file every hit for exactly "
+                                       f"{self.reference} (several with file_each). {self.mail_ask(topic)} This closes "
+                                       "by itself once you searched the subject word or filed such a record; answer "
+                                       "absent only if the inbox and the archive hold none.")
         return found
+
+    def mail_ask(self, topic: str) -> str:
+        return f"{self.mail_where(topic)} {self.mail_search(topic)}."
 
     def answer(self, question: str, status: str, note: str, agent: str | None = None) -> str:
         """An agent closes a question: its evidence is complete, or the thing does not exist."""
