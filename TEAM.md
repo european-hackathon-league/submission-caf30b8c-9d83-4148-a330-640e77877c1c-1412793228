@@ -300,6 +300,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 08:08 | run_fbaac569 | Maria | `maria/cost` **ccf5612** (rerun; named "maria/cost ccf5612") | running | | | | Comparison run (team lead) |
+| 08:08 | run_680b48a9 | Maria | `8c44dad` (rerun of the 05:47 code: form replay `fill_positions`, before the clerk/mail/paging changes; named "maria/cost 8c44dad") | running | | | | Comparison run (team lead) |
 | 08:01 | run_73af7b9c | Maria | `maria/cost` **991689d** (+ context gates: lean investigator prompts, more context only on trouble; token budget 1.1 M) | running | | | | Public check 2 |
 | 08:01 | run_0cd32dc4 | Maria | `maria/cost` **991689d** (+ context gates: lean investigator prompts, more context only on trouble; token budget 1.1 M) | running | | | | Public check 1 |
 | 07:45 | **run_10def205** | Vamshidhar | package a8cf1138 (no label) | **0** | ❌ | 15 min | 484 / $0.44 | No answer submitted (exited without submitting); customer-portal re-filed the spec 7× ("case file shows A-2 stroke as 482 but the document shows 489") |
