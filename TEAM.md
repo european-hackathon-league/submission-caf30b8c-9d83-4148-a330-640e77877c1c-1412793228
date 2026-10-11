@@ -183,6 +183,8 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 04:55 | run_a176359f | Maria | `maria/cost` **f851d41** (+ generalisation fixes from the evals: f4e04d2, 568b228) | running | | | | Public check 2: no regression from the eval fixes? |
+| 04:54 | run_15a3aaf9 | Maria | `maria/cost` **f851d41** (+ generalisation fixes from the evals: f4e04d2, 568b228) | running | | | | Public check 1 |
 | 04:33 | **run_33e5cab1** | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | **100** | ✅ | ~10 min | 244 / $0.26 | |
 | 04:32 | **run_19e4b85e** | Maria | `maria/cost` **d9bb4e5** (+ `file_each` tabs as click paths 492399c, links from the page the model saw 65d5b98, extra form position may be omitted 47eb5ef) | **100** | ✅ | ~11 min | 224 / $0.23 | After the Atira restart (503s 04:30) |
 | 04:29 | run_b7dcf384 → retry run_a5fca6aa | Vamshidhar | package 4c39b4d5 "fast-parallel 03f9ce1: 5 ERP + 5 mail tabs, mail records ahead, ends when nothing open (on maria/cost)" | b7dcf384: **– (platform failure)**; retry running | | | | Atira restarted it automatically |
