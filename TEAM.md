@@ -6,7 +6,7 @@ EHL Grand Finale 2026 · Atira challenge "From RFQ to bid". Updated 11 Oct 2026,
 
 | | |
 |---|---|
-| **Final package** | still **sub_902fc357 = f851d41** (100 on public, $0.176, 6:15; leaderboard **#10**). It **scores 0 on eval B** (and its predecessor 0 on eval A). Resubmitting cannot cost rank (best submission holds the place); only the private run gains |
+| **Final package** | **sub_b2b4d48c = `maria/cost` ccf5612** (submitted 08:40 UTC as insurance, review passed; scored run run_5cdc14ba in evaluation). Public tests 100 ×4 (6.5-9.8 min, $0.18-0.30); eval A 100, eval B 0 (ERP not woken for requirements without a catalogue group; fixed in 8999ddd). Before: sub_902fc357 = f851d41 |
 | **Best-tested candidates** | **8c44dad**: evals A 100/100, B 100/100, public 2/2 at 100. **ccf5612**: public 100/100 (6.5 and 8 min), eval A 100, eval B 0 = eval bug (TAN mail dated today) + clerk gaps, rerun on the fixed eval pending. **c47a3ce**: public 100 (10 min), eval A 100 |
 | **Newest head** | `maria/cost` **991689d** = sprints A-E (ERP walk learning, paged filing + done gate, mail checklist, `path` action, context gates + token budget 1.1 M). In test |
 | **Running sprints** | **F** mail coverage (every prescribed subject searched; mail questions routed firmly; FX early) · **G** clerk: skip the rest of a turn after a refused action, "submitted" only with the portal's confirmation, replay learns "no certificate" as a placeholder |
@@ -45,7 +45,7 @@ Global call cap (costs quality; the clerk turn reserve is the safe form) · ERP 
 
 | | |
 |---|---|
-| **Final package** (latest passed submission) | **sub_902fc357** = test run a176359f promoted by the organisers = `maria/cost` **f851d41** (100 on public, $0.176, 6:15). Has the first eval fixes (f4e04d2, 568b228) but **not** d6d6979 (requirements without pressure are matched), the revision-id fix or the clerk turn reserve: its predecessor 8d1f0b5 scored 0 on eval A. **1d0ecea has all of them** |
+| **Final package** (latest passed submission) | **sub_b2b4d48c** = `maria/cost` **ccf5612** (08:40 UTC, review passed): mail checklist + paged-document fixes on top of d07e558; 4 of 4 public tests 100. Known gap: eval B 0 (group-less requirements, fixed in 8999ddd). Previous: sub_902fc357 = f851d41 |
 | **Leaderboard** | **#7**, 100, $0.164, 8:21. Ranking between equal quality = **cost × time** (fits every pair on the board): we are at 1.37; #6 AdminRights 1.16, #5 EliTUM 1.11, #4 error404 0.83. The top three are at 0.03-0.25 |
 | **Promotions** | The organisers promote our better test runs to submissions themselves (44a626ef, then 1b83cba3 + 9902e32b, then 4876a0ad). **A test run can become our final package**: only test code we would be happy to see in the final |
 | **Branches** | `maria/escalation` (all robustness fixes + clerk fixes, last dba5e72) → `maria/cost` (+ cost cuts, last 8e19c98). Neither merged to main; main (d72deb8) has none of these fixes |
