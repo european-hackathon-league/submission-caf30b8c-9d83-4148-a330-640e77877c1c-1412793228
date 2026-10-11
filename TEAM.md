@@ -161,6 +161,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 03:58 | run_b3f1b38f | Vamshidhar | package 0cca498f = main **d72deb8** (ERP candidate audit) | running | | | | |
 | 03:35 | **sub_973a02b5 (SUBMISSION, promoted by the organisers)** | Organisers | test run 4876a0ad = `maria/cost` **9105e5e** (package 4c5ab3f4) | **100** | ✅ | 8.4 min | 184 / **$0.164** | **Now our final package** (latest passed submission). ⚠️ Same package as 012496d3, which scored 0 (clerk omit loop). Leaderboard 04:00 UTC: **#7**, $0.164, 8:21 |
 | 03:53 | run_608c82d7 | Maria | `maria/cost` **8e19c98** (= 9105e5e + clerk fix dba5e72) | running | | | | Cost + clerk fix, check 2 |
 | 03:52 | run_bf29711e | Maria | `maria/cost` **8e19c98** (= 9105e5e + clerk fix dba5e72) | running | | | | Cost + clerk fix, check 1 |
