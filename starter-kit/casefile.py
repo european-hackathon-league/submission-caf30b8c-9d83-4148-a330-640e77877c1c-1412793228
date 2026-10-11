@@ -22,7 +22,7 @@ from browser_env import PAGE_BREAK
 from sanity import same_value
 from calculator import (Authorities, BonusBand, Clarification, Commitment, MASS_TO_GRAMS, Material, Position,
                         PriceCondition, Requirement, active_clarifications, base_price, final_quantities,
-                        match_material, merged_assignments, parse_number, parse_when, resolve_requirements, same_text)
+                        match_material, merged_assignments, parse_number, parse_when, resolve_requirements, same_revision, same_text)
 
 TOPICS = ("discount_approval", "condition_rules", "price_indices", "tech_release", "packaging_tariffs",
           "delivery_release", "fx_fixing", "setup_pools", "project_bonus")
@@ -495,7 +495,7 @@ class CaseFile:
         for key, row in self.revisions.items():
             when = parse_when(row.get("date"))
             if row.get("status") == "current" and (when is None or when <= self.scenario):
-                filed = any(same_text(key, revision) for revision in with_requirements)
+                filed = any(same_revision(key, revision) for revision in with_requirements)
                 current.append((filed, when or datetime.min.replace(tzinfo=timezone.utc), key))
         return max(current)[2] if current else None
 
@@ -627,7 +627,7 @@ class CaseFile:
                 clarifications.append(Clarification(f"mail:{key}", when, quantity_changes=changes))
         requirements = {}
         for (revision, ref), row in self.requirements.items():
-            if governing and revision and not same_text(revision, governing):
+            if governing and revision and not same_revision(revision, governing):
                 continue
             if not governing and revision:
                 continue
