@@ -300,6 +300,7 @@ Updated after every run. Times in UTC (Berlin = UTC+2). Score = Atira's official
 
 | Started (UTC) | Run | Who | Code | Quality | Eligible | Time | Calls / cost | Main finding |
 |---|---|---|---|---|---|---|---|---|
+| 08:40 | **SUBMISSION sub_b2b4d48c** (scored run run_5cdc14ba) | Maria | `maria/cost` **ccf5612** (insurance submission; package 28933808) | review passed, in evaluation | | | | Public tests of ccf5612: 100 ×4 (run_74e84e70, run_6d30dbd4, run_fbaac569, run_7a2a43e6) |
 | 08:32 | run_4068e3c3 | Maria | `maria/cost` **8999ddd** (gate fix) | running | | | | Public check 2 |
 | 08:30 | run_b462cdb3 | Maria | `maria/cost` **8999ddd** (+ gate fix: standing job per site, no done before the job is done, wake on new records, material questions without catalogue group, token budget off; also Sprint F mail coverage + Sprint G clerk fixes) | running | | | | Public check 1 |
 | 08:21 | **run_fa240524** | Vamshidhar | package 2c82a7bf (= the current final submission's package) | **39.5** | ✅ | 13 min | 205 / $0.20 | ⚠️ **The current final package scored 39.5 here**: mail agent only 20 calls/247k, left reserves (A-2/A-4), condition groups, Rüstpool, Projektbonus and MET-4607 open → 01.02-01.04 omitted. Investigation 681 s (ERP 79 calls/851k). Clerk 24 turns |
